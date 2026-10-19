@@ -168,9 +168,21 @@ def _resolve_doc(rows: Sequence[SnapshotDocRow], token: str) -> str:
     return ids[0]
 
 
-def _resolve_ref(catalog: Catalog, ref: str) -> VersionRow:
+def _resolve_ref(catalog: Catalog, ref: str, *, promote: bool = False) -> VersionRow:
+    """`dag/node@vN` exactly. A bare `dag/node` is the current version, or the newest one (with a
+    note) when nothing is current; for promote it is the newest non-scratch version."""
     from ingest.publish import resolve_ref
 
+    if "@" not in ref and ref.count("/") == 1:
+        dag, node = ref.split("/")
+        if promote:
+            versions = catalog.list_versions(dag, node, include_scratch=False)
+            if not versions:
+                _fail(f"{ref} has no promotable version")
+            return versions[0]
+        if catalog.current_version(dag, node) is None and (versions := catalog.list_versions(dag, node)):
+            typer.echo(f"{ref} has no current version; using {versions[0].label}", err=True)
+            return versions[0]
     try:
         return resolve_ref(catalog, ref)
     except LookupError as e:
@@ -763,7 +775,7 @@ def _print_doc_diff(d: dict[str, Any]) -> None:
 @app.command()
 def promote(
     ctx: typer.Context,
-    ref: Annotated[str, typer.Argument(help="dag/node@vN.")],
+    ref: Annotated[str, typer.Argument(help="dag/node (newest candidate) or dag/node@vN.")],
     yes: Annotated[bool, typer.Option("--yes", "-y", help="Don't ask for confirmation.")] = False,
 ) -> None:
     """Make a version current."""
@@ -772,7 +784,7 @@ def promote(
 
     config = _config(ctx)
     with _catalog(config) as catalog:
-        v = _resolve_ref(catalog, ref)
+        v = _resolve_ref(catalog, ref, promote=True)
         ok, reasons = promotable(catalog, v.id)
         if not ok:
             _fail(f"{v.label} is not promotable: {'; '.join(reasons)}")

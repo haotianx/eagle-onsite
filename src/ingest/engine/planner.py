@@ -88,6 +88,29 @@ class PlanError(Exception):
     pass
 
 
+def dirty_nodes(repo_root: Path, dag: DagSpec, names: Sequence[str] | None = None) -> set[str]:
+    """Nodes (of `names`, default all) whose definition differs from HEAD: their script or
+    checks file has uncommitted changes, or their entry in the DAG YAML (or the DAG's source)
+    does. Editing one node's params leaves the other nodes clean."""
+    names = list(dag.nodes if names is None else names)
+    paths = gitinfo.dirty_paths(repo_root)
+    out = {n for n in names if any(f in paths for f in dag.node_files(n) if f != dag.path)}
+    if dag.path in paths:
+        head = _head_dag(repo_root, dag.path)
+        out |= {n for n in names if head is None or head.source != dag.source or head.nodes.get(n) != dag.nodes[n]}
+    return out
+
+
+def _head_dag(repo_root: Path, path: str) -> DagSpec | None:
+    with tempfile.TemporaryDirectory() as tmp:
+        if gitinfo.materialize_head(repo_root, [path], Path(tmp)):
+            return None
+        try:
+            return parse_dag(Path(tmp) / path, Path(tmp))
+        except DagError:
+            return None
+
+
 def selected_nodes(dag: DagSpec, selection: Selection, target: str | None) -> list[str]:
     if selection not in SELECTIONS:
         raise PlanError(f"unknown selection {selection!r} (expected {', '.join(SELECTIONS)})")
@@ -113,7 +136,7 @@ def plan_run(catalog: Catalog, config: Config, request: RunRequest, *, code_root
     working_dag = _find_dag(repo, request.dag, config, required=False)
     if working_dag is not None:
         names = selected_nodes(working_dag, request.selection, request.target)
-        dirty = gitinfo.is_dirty(repo, {f for n in names for f in working_dag.node_files(n)})
+        dirty = bool(dirty_nodes(repo, working_dag, names))
     else:
         dirty = False
 
@@ -148,7 +171,7 @@ def _plan(
         raise PlanError(f"unknown recompute {request.recompute!r} (expected reuse or force)")
     names = selected_nodes(dag, request.selection, request.target)
     if code == "committed":
-        dirty = dirty or gitinfo.is_dirty(config.repo_root, {f for n in names for f in dag.node_files(n)})
+        dirty = dirty or bool(dirty_nodes(config.repo_root, dag, names))
 
     snapshot = _snapshot(catalog, dag, request.snapshot_id)
     all_ids = [d.doc_id for d in catalog.snapshot_docs(snapshot)]

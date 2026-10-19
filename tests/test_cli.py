@@ -207,9 +207,9 @@ def test_status_after_param_change(synced: Cli) -> None:
     dag = synced.repo / "dags" / "toy.yaml"
     dag.write_text(TOY_DAG.replace("{n: 2}", "{n: 3}"))
     out = synced("status")
-    assert re.search(r"size\s+fresh\s+v1\s+—\s+0\s+uncommitted\s*$", out, re.M)
+    assert re.search(r"size\s+fresh\s+v1\s+—\s+0\s*$", out, re.M)
     assert re.search(r"rows\s+stale\s+v1\s+—\s+0\s+uncommitted\s+code or params changed", out)
-    assert re.search(r"total\s+stale\s+v1\s+—\s+0\s+uncommitted\s+input rows is stale", out)
+    assert re.search(r"total\s+stale\s+v1\s+—\s+0\s+input rows is stale", out)
 
 
 def test_show_version_and_doc(synced: Cli) -> None:
@@ -234,7 +234,7 @@ def test_show_version_and_doc(synced: Cli) -> None:
     out = synced("show", "toy/size@v1", "--doc", "2292")
     assert '"salt": 1' in out
 
-    assert "no current version" in synced("show", "toy/rows", code=1)
+    assert "no current version; using toy/rows@v1" in synced("show", "toy/rows")
     assert "not found" in synced("show", "toy/rows@v9", code=1)
 
 
@@ -336,3 +336,13 @@ def test_models_pull_and_default_run(tmp_repo: Path) -> None:
     for node in ("ocr", "chunk", "embed"):
         assert re.search(rf"^{node}  default/{node}@v1 · ok 2 · error 0", out, re.M), out
     assert "run 1 succeeded" in out
+
+
+def test_bare_refs(synced: Cli) -> None:
+    synced("run", "toy")
+    out = synced("show", "toy/rows")
+    assert "toy/rows@v1" in out
+    assert "no current version; using toy/rows@v1" in out
+    assert "toy/size@v1 is current" in synced("promote", "toy/size", "--yes")
+    assert "already current" in synced("promote", "toy/size", "--yes", code=1)
+    assert "has no promotable version" in synced("promote", "toy/nope", "--yes", code=1)
