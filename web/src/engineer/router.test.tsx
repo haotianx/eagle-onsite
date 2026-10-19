@@ -8,13 +8,16 @@ describe("engineer routes", () => {
   it("redirects / to /dags and renders the page in the layout", async () => {
     const { router } = await renderRoute("/");
     expect(router.state.location.pathname).toBe("/dags");
-    expect(await screen.findByRole("heading", { name: "DAGs" })).toBeInTheDocument();
+    expect(await screen.findByRole("link", { name: "DAGs" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("link", { name: "Runs" })).toHaveAttribute("href", "/runs");
   });
 
-  it("renders a page by path", async () => {
-    await renderRoute("/versions/12?tab=issues");
-    expect(await screen.findByRole("heading", { name: "Version" })).toBeInTheDocument();
+  it("matches a page by path", async () => {
+    const { router } = await renderRoute("/versions/12?tab=issues");
+    const match = router.state.matches.at(-1);
+    expect(match?.routeId).toBe("/versions/$versionId");
+    expect(match?.params).toEqual({ versionId: "12" });
+    expect(match?.search).toEqual({ tab: "issues" });
   });
 
   it("validates search params", async () => {
