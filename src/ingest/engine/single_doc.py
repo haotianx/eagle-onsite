@@ -377,6 +377,8 @@ class SingleDocRunner:
             except BaseException:
                 catalog.close()
                 raise
+            for stale in catalog.active_runs(kind="single_doc"):
+                catalog.set_run_status(stale.id, "failed", "single-doc runner restarted")
             self._catalog = catalog
             self._thread = threading.Thread(target=self._loop, name="ingest-single-doc", daemon=True)
             self._thread.start()

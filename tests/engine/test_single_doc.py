@@ -293,3 +293,15 @@ def test_default_dag_upload(tmp_repo: Path, tmp_path: Path) -> None:
     finally:
         runner.close()
         e.catalog.close()
+
+
+def test_start_fails_runs_left_by_a_previous_runner(sd: Env) -> None:
+    stale = sd.catalog.create_run("toy", {"path": "uploads/x.pdf"}, scratch=False, commit=None, dirty=False, kind="single_doc")
+    dag_run = sd.catalog.create_run("toy", {"nodes": ["size"]}, scratch=False, commit=None, dirty=False)
+    runner = SingleDocRunner(sd.config, dag="toy", node="join")
+    runner.start()
+    try:
+        assert (sd.catalog.get_run(stale).status, sd.catalog.get_run(stale).error) == ("failed", "single-doc runner restarted")
+        assert sd.catalog.get_run(dag_run).status == "queued"
+    finally:
+        runner.close()
