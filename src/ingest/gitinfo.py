@@ -150,6 +150,8 @@ def watch(
         debounce=debounce_ms,
         raise_interrupt=False,
     ):
-        changed = {r for _, path in changes if (r := rel(path)) is not None and under(r)}
+        changed = {
+            r for _, path in changes if not Path(path).is_dir() and (r := rel(path)) is not None and under(r)
+        }
         if changed:
             callback(changed)
