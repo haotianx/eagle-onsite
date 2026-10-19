@@ -1,5 +1,5 @@
 data_dir = ".ingest"
 
 [sources.proposals]
-root = "/Users/Shared/proposals"
+folders = ["/Users/Shared/proposals", "{data_dir}/uploads"]
 glob = "**/*.pdf"

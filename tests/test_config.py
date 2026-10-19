@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from ingest.config import DATA_DIR_ENV, find_repo_root, load_config
+from ingest.config import DATA_DIR_ENV, SourceConfig, find_repo_root, load_config
 
 
 def test_find_repo_root_walks_up(tmp_repo: Path) -> None:
@@ -28,7 +28,30 @@ def test_load_config(tmp_repo: Path, fixtures_dir: Path, monkeypatch: pytest.Mon
     src = cfg.sources["proposals"]
     assert src.name == "proposals"
     assert src.root == fixtures_dir
+    assert src.folders == (fixtures_dir,)
     assert src.glob == "**/*.pdf"
+
+
+def test_folders_and_data_dir_placeholder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(DATA_DIR_ENV, raising=False)
+    (tmp_path / "ingest.toml").write_text('[sources.p]\nfolders = ["/abs/docs", "{data_dir}/uploads", "rel"]\n')
+    root = tmp_path.resolve()
+    src = load_config(tmp_path).sources["p"]
+    assert src.folders == (Path("/abs/docs"), root / ".ingest" / "uploads", root / "rel")
+    assert src.root == Path("/abs/docs")
+
+    monkeypatch.setenv(DATA_DIR_ENV, str(tmp_path / "elsewhere"))
+    assert load_config(tmp_path).sources["p"].folders[1] == tmp_path / "elsewhere" / "uploads"
+
+
+def test_source_config_validation() -> None:
+    assert SourceConfig("p", root=Path("/a")) == SourceConfig("p", (Path("/a"),))
+    with pytest.raises(ValueError):
+        SourceConfig("p")
+    with pytest.raises(ValueError):
+        SourceConfig("p", (Path("/a"),), root=Path("/b"))
+    with pytest.raises(ValueError):
+        SourceConfig("p", (Path("/a"), Path("/x/up"), Path("/y/up")))
 
 
 def test_defaults_and_relative_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -67,6 +90,11 @@ def test_no_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         "[sources.x]\nglob = '*.pdf'\n",
         "[sources.x]\nroot = 'a'\nextra = 1\n",
         "[sources.x]\nroot = 'a'\nglob = ''\n",
+        "[sources.x]\nroot = 'a'\nfolders = ['b']\n",
+        "[sources.x]\nfolders = []\n",
+        "[sources.x]\nfolders = 'a'\n",
+        "[sources.x]\nfolders = ['a', '']\n",
+        "[sources.x]\nfolders = ['a', 'x/up', 'y/up']\n",
         "not toml = = \n",
     ],
 )
@@ -74,3 +102,9 @@ def test_invalid(tmp_path: Path, text: str) -> None:
     (tmp_path / "ingest.toml").write_text(text)
     with pytest.raises(ValueError):
         load_config(tmp_path)
+
+
+def test_repo_config_includes_uploads(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(DATA_DIR_ENV, raising=False)
+    cfg = load_config(Path(__file__).parents[1])
+    assert cfg.sources["proposals"].folders == (Path("/Users/Shared/proposals"), cfg.uploads_dir)
