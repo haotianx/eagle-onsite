@@ -351,12 +351,13 @@ class Generations:
         while True:
             final = gen.rounds >= self.qconfig.max_rounds
             snapshot = await self._call(gen, history + gen.added, final=final)
-            blocks = _clean_blocks(snapshot.content)
-            gen.added.append({"role": "assistant", "content": blocks})
             gen.pending = None
             gen.stop_reason = snapshot.stop_reason
             if snapshot.stop_reason == "refusal":
+                # A declined response's partial output is incomplete: keep it out of the history.
                 raise _Refused
+            blocks = _clean_blocks(snapshot.content)
+            gen.added.append({"role": "assistant", "content": blocks})
             tool_uses = [b for b in blocks if b["type"] == "tool_use"]
             if snapshot.stop_reason != "tool_use" or not tool_uses or final:
                 return

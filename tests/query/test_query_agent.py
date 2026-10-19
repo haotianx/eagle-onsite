@@ -809,6 +809,8 @@ def test_error_kinds(env: Env, script: Any, kind: str) -> None:
         assert row.state == "error" and row.error == kind
         if kind in ("rate_limit", "api"):
             assert row.request_ids == ["req_err"]
+        if kind == "refusal":
+            assert row.content == []
         assert not env.client.title_calls and env.store.get_chat(env.chat).title is None
         await env.ask("q2", answer(("ok", [])))
         assert_valid_history(env.client.calls[-1]["messages"])
