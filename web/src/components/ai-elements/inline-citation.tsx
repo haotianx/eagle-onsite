@@ -1,6 +1,5 @@
 "use client";
 
-import { Badge } from "@/components/ui/badge";
 import {
   Carousel,
   type CarouselApi,
@@ -53,30 +52,23 @@ export const InlineCitationCard = (props: InlineCitationCardProps) => (
   <HoverCard closeDelay={0} openDelay={0} {...props} />
 );
 
-export type InlineCitationCardTriggerProps = ComponentProps<typeof Badge> & {
-  sources: string[];
-};
+// Adapted: the trigger is a numbered button (children) rather than a badge naming the sources'
+// hostnames.
+export type InlineCitationCardTriggerProps = ComponentProps<"button">;
 
 export const InlineCitationCardTrigger = ({
-  sources,
   className,
   ...props
 }: InlineCitationCardTriggerProps) => (
   <HoverCardTrigger asChild>
-    <Badge
-      className={cn("ml-1 rounded-full", className)}
-      variant="secondary"
-      {...props}
-    >
-      {sources[0] ? (
-        <>
-          {new URL(sources[0]).hostname}{" "}
-          {sources.length > 1 && `+${sources.length - 1}`}
-        </>
-      ) : (
-        "unknown"
+    <button
+      className={cn(
+        "relative -top-px mx-0.5 inline-flex h-4 min-w-4 cursor-pointer items-center justify-center rounded-full bg-secondary px-1 align-middle font-medium text-[0.625rem] text-secondary-foreground tabular-nums transition-colors hover:bg-primary hover:text-primary-foreground",
+        className
       )}
-    </Badge>
+      type="button"
+      {...props}
+    />
   </HoverCardTrigger>
 );
 
