@@ -36,9 +36,11 @@ class QueryConfig:
 
 
 def load_query_config(config: Config) -> QueryConfig:
-    """Read the [query] table of <repo>/ingest.toml; defaults for missing keys. Raises
-    ValueError for unknown keys or values of the wrong type."""
+    """Read the [query] table of <repo>/ingest.toml; defaults for missing keys (or a missing
+    file). Raises ValueError for unknown keys or values of the wrong type."""
     path = config.repo_root / CONFIG_FILE
+    if not path.is_file():
+        return QueryConfig()
     try:
         raw = tomllib.loads(path.read_text(encoding="utf-8")).get("query", {})
     except tomllib.TOMLDecodeError as e:

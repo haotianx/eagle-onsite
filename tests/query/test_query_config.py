@@ -26,3 +26,7 @@ def test_reads_query_table(tmp_path: Path) -> None:
 def test_rejects_bad_keys(tmp_path: Path, body: str) -> None:
     with pytest.raises(ValueError):
         load_query_config(_config(tmp_path, f"[query]\n{body}\n"))
+
+
+def test_defaults_without_ingest_toml(tmp_path: Path) -> None:
+    assert load_query_config(Config(repo_root=tmp_path, data_dir=tmp_path / ".ingest", sources={})) == QueryConfig()
