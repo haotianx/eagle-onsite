@@ -47,7 +47,7 @@ _DIGITS = re.compile(r"[0-9]+")
 def default_embedder_factory(meta: Mapping[str, Any]) -> QueryEmbedder:
     from ingest import search
 
-    return search.query_embedder(meta)
+    return search.get_embedder(meta)
 
 
 @dataclass(frozen=True)
