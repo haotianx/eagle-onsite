@@ -83,7 +83,7 @@ def test_sync_diff_and_snapshot_docs(world: World, copied: tuple[Config, Path]) 
 
 def test_sync_missing_root(client: TestClient, world: World, tmp_path: Path) -> None:
     sources = dict(world.config.sources)
-    sources["gone"] = SourceConfig("gone", tmp_path / "gone")
+    sources["gone"] = SourceConfig("gone", root=tmp_path / "gone")
     client.app.state.config = Config(world.config.repo_root, world.config.data_dir, sources)
     assert client.post("/api/sources/gone/sync").status_code == 400
 
