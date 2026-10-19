@@ -60,7 +60,8 @@ CREATE TABLE IF NOT EXISTS runs (
     started_at TEXT,
     ended_at TEXT,
     error TEXT,
-    cancel_requested INTEGER NOT NULL DEFAULT 0
+    cancel_requested INTEGER NOT NULL DEFAULT 0,
+    kind TEXT NOT NULL DEFAULT 'dag' CHECK (kind IN ('dag', 'single_doc'))
 );
 CREATE INDEX IF NOT EXISTS runs_dag ON runs(dag, id);
 CREATE INDEX IF NOT EXISTS runs_status ON runs(status);
@@ -142,4 +143,22 @@ CREATE TABLE IF NOT EXISTS current (
     version_id INTEGER NOT NULL REFERENCES versions(id),
     promoted_at TEXT NOT NULL,
     PRIMARY KEY (dag, node)
+);
+
+CREATE TABLE IF NOT EXISTS pending_docs (
+    doc_id TEXT NOT NULL,
+    version_id INTEGER NOT NULL REFERENCES versions(id) ON DELETE CASCADE,
+    run_id INTEGER NOT NULL REFERENCES runs(id),
+    paths TEXT NOT NULL,          -- JSON list
+    meta TEXT NOT NULL,           -- JSON object
+    object_sha TEXT NOT NULL,
+    pages INTEGER,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (doc_id, version_id)
+);
+CREATE INDEX IF NOT EXISTS pending_docs_version ON pending_docs(version_id, created_at);
+
+CREATE TABLE IF NOT EXISTS removed_docs (
+    doc_id TEXT PRIMARY KEY,
+    removed_at TEXT NOT NULL
 );

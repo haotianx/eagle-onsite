@@ -13,8 +13,17 @@ import pytest
 import ingest
 from ingest.config import load_config
 from ingest.contract import text_hash
-from ingest.publish import SCHEMA_META_KEY, load_table, resolve_ref, version_metadata, version_table, write_published
-from ingest.store.catalog import Catalog, SnapshotDocInput, VersionDocInput
+from ingest.publish import (
+    SCHEMA_META_KEY,
+    library,
+    load_library,
+    load_table,
+    resolve_ref,
+    version_metadata,
+    version_table,
+    write_published,
+)
+from ingest.store.catalog import Catalog, PendingDocInput, SnapshotDocInput, VersionDocInput
 from ingest.store.objects import ObjectStore
 
 DIM = 4
@@ -26,10 +35,12 @@ SNAPSHOT = [
 ]
 
 
-def embed_table(doc_id: str, texts: list[str]) -> pa.Table:
+def embed_table(doc_id: str, texts: list[str], pages: list[list[int]] | None = None) -> pa.Table:
     vectors = np.ones((len(texts), DIM), dtype=np.float32) / 2
+    extra = {} if pages is None else {"pages": pa.array(pages, pa.list_(pa.int64()))}
     return pa.table(
         {
+            **extra,
             "chunk_id": [f"{doc_id}-{i}" for i in range(len(texts))],
             "doc_id": [doc_id] * len(texts),
             "seq": pa.array(range(len(texts)), pa.int64()),
@@ -41,14 +52,16 @@ def embed_table(doc_id: str, texts: list[str]) -> pa.Table:
     )
 
 
-def build(cat: Catalog, objects: ObjectStore, node: str = "embed", *, current: bool = True) -> int:
+def build(
+    cat: Catalog, objects: ObjectStore, node: str = "embed", *, current: bool = True, inputs: dict[str, int] | None = None
+) -> int:
     snapshot_id = cat.create_snapshot("proposals", SNAPSHOT, 4)
     v = cat.create_version(
         dag="default",
         node=node,
         node_fp="fp",
         snapshot_id=snapshot_id,
-        input_versions={},
+        input_versions=inputs or {},
         run_id=None,
         commit="abc",
         dirty=False,
@@ -163,3 +176,100 @@ def test_write_published(cat: Catalog, objects: ObjectStore, tmp_path: Path) -> 
     assert written.equals(expected)
     assert written.schema.field("vector").type == pa.list_(pa.float32(), DIM)
     assert json.loads(written.schema.metadata[SCHEMA_META_KEY]) == version_metadata(cat, v)
+
+
+def lineage_version(cat: Catalog, node: str, artifact_type: str, inputs: dict[str, int], pages: dict[str, int]) -> int:
+    snapshot_id = cat.create_snapshot("proposals", SNAPSHOT, 4)
+    v = cat.create_version(
+        dag="default", node=node, node_fp="fp-" + node, snapshot_id=snapshot_id, input_versions=inputs, run_id=None,
+        commit="abc", dirty=False, scratch=False, artifact_type=artifact_type, meta={},
+    )
+    cat.add_version_docs(
+        v.id, [VersionDocInput(d, "ok", "0" * 64, "json", metrics={"pages": float(n)}) for d, n in pages.items()]
+    )
+    return cat.finalize_version(v.id, {}).id
+
+
+def build_library(cat: Catalog, objects: ObjectStore) -> int:
+    """Current embed v2 (lineage: embed ← chunk ← ocr, pages d1=4, d2=5) with pending docs u1
+    (an upload), u2 (pages from its rows) and d2 (already in the version); o1 pending against the
+    older v1; d1 and u3 removed."""
+    old = build(cat, objects, current=False)
+    ocr = lineage_version(cat, "ocr", "parse", {}, {"d1": 4, "d2": 5})
+    chunk = lineage_version(cat, "chunk", "chunk", {"ocr": ocr}, {})
+    v = build(cat, objects, inputs={"chunk": chunk})
+    run = cat.create_run("default", {}, scratch=False, commit="abc", dirty=False, kind="single_doc")
+
+    def pending(doc_id: str, version_id: int, path: str, meta: dict[str, Any], table: pa.Table, pages: int | None) -> None:
+        cat.add_pending_doc(PendingDocInput(doc_id, version_id, run, (path,), meta, objects.put_table(table), pages))
+
+    pending("u1", v, "uploads/u1.pdf", {"filename": "u1.pdf"}, embed_table("u1", ["shared boilerplate", "u"]), 7)
+    pending("u2", v, "4000 NEW/n.pdf", {"job_number": 4000}, embed_table("u2", ["x", "y"], [[1], [2, 3]]), None)
+    pending("d2", v, "1000 ACME/a.pdf", {}, embed_table("d2", ["stale"]), 1)
+    pending("o1", old, "uploads/o1.pdf", {}, embed_table("o1", ["shared boilerplate"]), 1)
+    pending("u3", v, "uploads/u3.pdf", {}, embed_table("u3", ["shared boilerplate"]), 1)
+    cat.add_removed_doc("d1")
+    cat.add_removed_doc("u3")
+    return v
+
+
+def test_library(cat: Catalog, objects: ObjectStore) -> None:
+    v = build_library(cat, objects)
+    lib = library(cat, objects)
+    t = lib.rows
+    assert t.column("doc_id").to_pylist() == ["d2", "u1", "u1", "u2", "u2"]
+    assert t.column("text").to_pylist() == ["shared boilerplate", "shared boilerplate", "u", "x", "y"]
+    assert t.column("paths").to_pylist() == [["1000 ACME/a.pdf", "copy/a.pdf"], *[["uploads/u1.pdf"]] * 2,
+                                             *[["4000 NEW/n.pdf"]] * 2]
+    assert t.column("job_number").to_pylist() == ["1000", None, None, "4000", "4000"]
+    assert t.column("filename").to_pylist() == [None, "u1.pdf", "u1.pdf", None, None]
+    # d1 (removed) shared the boilerplate too; u3 (removed) and o1 (older version) don't count.
+    assert t.column("dup_count").to_pylist() == [2, 2, 1, 1, 1]
+    # Only u2's rows carry pages (null elsewhere after promotion).
+    assert [c for c in t.column_names if c != "pages"] == version_table(cat, objects, v).column_names
+    assert t.column("pages").to_pylist() == [None, None, None, [1], [2, 3]]
+    assert json.loads(t.schema.metadata[SCHEMA_META_KEY]) == version_metadata(cat, v) == lib.version
+
+    docs = lib.documents
+    assert docs.column_names == [
+        "doc_id", "paths", "job_number", "project", "subfolder", "filename", "pages", "upload", "pending"
+    ]
+    assert docs.schema.field("pages").type == pa.int64()
+    assert docs.to_pylist() == [
+        {"doc_id": "d2", "paths": ["1000 ACME/a.pdf", "copy/a.pdf"], "job_number": "1000", "project": "ACME",
+         "subfolder": None, "filename": None, "pages": 5, "upload": False, "pending": False},
+        {"doc_id": "u1", "paths": ["uploads/u1.pdf"], "job_number": None, "project": None, "subfolder": None,
+         "filename": "u1.pdf", "pages": 7, "upload": True, "pending": True},
+        {"doc_id": "u2", "paths": ["4000 NEW/n.pdf"], "job_number": "4000", "project": None, "subfolder": None,
+         "filename": None, "pages": 3, "upload": False, "pending": True},
+    ]
+
+
+def test_library_without_pending(cat: Catalog, objects: ObjectStore) -> None:
+    v = build(cat, objects)
+    lib = library(cat, objects, "default/embed")
+    assert lib.rows.equals(version_table(cat, objects, v))
+    assert lib.documents.column("doc_id").to_pylist() == ["d2", "d1"]
+    assert lib.documents.column("pages").to_pylist() == [None, None]
+
+
+def test_library_requires_current_version(cat: Catalog, objects: ObjectStore) -> None:
+    with pytest.raises(LookupError):
+        library(cat, objects)
+    build(cat, objects, current=False)
+    with pytest.raises(LookupError):
+        library(cat, objects)
+    with pytest.raises(LookupError):
+        library(cat, objects, "default/embed@v1")
+
+
+def test_load_library(tmp_repo: Path) -> None:
+    config = load_config(tmp_repo)
+    cat = Catalog(config.catalog_path)
+    try:
+        build_library(cat, ObjectStore(config.objects_dir))
+    finally:
+        cat.close()
+    lib = load_library(repo_root=tmp_repo)
+    assert lib.documents.column("doc_id").to_pylist() == ["d2", "u1", "u2"]
+    assert ingest.load_library("default/embed", repo_root=tmp_repo).rows.equals(lib.rows)

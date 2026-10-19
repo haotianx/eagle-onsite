@@ -1,5 +1,5 @@
 """SQLite catalog: snapshots, file index, cache index, runs, events, versions, current, issues,
-metrics. Schema lives in schema.sql and is created on open.
+metrics, pending docs, removed docs. Schema lives in schema.sql and is created on open.
 
 Concurrency: WAL mode. Many readers (API, CLI); writes come from one process per run (the
 executor parent) plus short CLI/API actions (promote, cancel). Use a busy timeout. JSON columns are
@@ -25,6 +25,7 @@ BUSY_TIMEOUT_MS = 30_000
 _IN_CHUNK = 500
 
 
+RunKind: TypeAlias = Literal["dag", "single_doc"]
 RunStatus: TypeAlias = Literal["queued", "running", "succeeded", "failed", "cancelled"]
 VersionStatus: TypeAlias = Literal["building", "complete", "abandoned"]
 DocStatus: TypeAlias = Literal["ok", "error", "skipped"]
@@ -88,7 +89,7 @@ class RunRow:
     ended_at: str | None
     error: str | None
     cancel_requested: bool
-    kind: str = "dag"
+    kind: RunKind = "dag"
     """"dag" or "single_doc" (single-doc runs: Ingestion-Design §8)."""
 
 
@@ -247,6 +248,20 @@ def _run(r: sqlite3.Row) -> RunRow:
         ended_at=r["ended_at"],
         error=r["error"],
         cancel_requested=bool(r["cancel_requested"]),
+        kind=r["kind"],
+    )
+
+
+def _pending_doc(r: sqlite3.Row) -> PendingDocRow:
+    return PendingDocRow(
+        doc_id=r["doc_id"],
+        version_id=r["version_id"],
+        run_id=r["run_id"],
+        paths=tuple(json.loads(r["paths"])),
+        meta=json.loads(r["meta"]),
+        object_sha=r["object_sha"],
+        pages=r["pages"],
+        created_at=r["created_at"],
     )
 
 
@@ -466,13 +481,22 @@ class Catalog:
             )
 
     # Runs and events
-    def create_run(self, dag: str, request: Mapping[str, Any], *, scratch: bool, commit: str | None, dirty: bool) -> int:
+    def create_run(
+        self,
+        dag: str,
+        request: Mapping[str, Any],
+        *,
+        scratch: bool,
+        commit: str | None,
+        dirty: bool,
+        kind: RunKind = "dag",
+    ) -> int:
         """Status 'queued'."""
         with self.transaction():
             return self._conn.execute(
-                "INSERT INTO runs (dag, request, status, scratch, git_commit, dirty, created_at)"
-                " VALUES (?, ?, 'queued', ?, ?, ?, ?)",
-                (dag, _dumps(dict(request)), int(scratch), commit, int(dirty), _now()),
+                "INSERT INTO runs (dag, request, status, scratch, git_commit, dirty, created_at, kind)"
+                " VALUES (?, ?, 'queued', ?, ?, ?, ?, ?)",
+                (dag, _dumps(dict(request)), int(scratch), commit, int(dirty), _now(), kind),
             ).lastrowid
 
     def set_run_status(self, run_id: int, status: RunStatus, error: str | None = None) -> None:
@@ -500,14 +524,18 @@ class Catalog:
             rows = self._all("SELECT * FROM runs WHERE dag = ? ORDER BY id DESC LIMIT ?", (dag, limit))
         return [_run(r) for r in rows]
 
-    def active_runs(self, dag: str | None = None) -> list[RunRow]:
-        """Queued or running."""
+    def active_runs(self, dag: str | None = None, *, kind: RunKind | None = "dag") -> list[RunRow]:
+        """Queued or running, oldest first. Only DAG runs by default (single-doc runs take no
+        per-node lock); kind=None returns all kinds."""
         sql = "SELECT * FROM runs WHERE status IN ('queued', 'running')"
-        if dag is None:
-            rows = self._all(sql + " ORDER BY id")
-        else:
-            rows = self._all(sql + " AND dag = ? ORDER BY id", (dag,))
-        return [_run(r) for r in rows]
+        args: list[Any] = []
+        if dag is not None:
+            sql += " AND dag = ?"
+            args.append(dag)
+        if kind is not None:
+            sql += " AND kind = ?"
+            args.append(kind)
+        return [_run(r) for r in self._all(sql + " ORDER BY id", args)]
 
     def request_cancel(self, run_id: int) -> None:
         with self.transaction():
@@ -711,19 +739,42 @@ class Catalog:
     # Single-doc runs: pending and removed docs (Ingestion-Design §8, §12)
     def add_pending_doc(self, doc: PendingDocInput) -> None:
         """Record a doc processed by a single-doc run against an embed version (insert or replace
-        per (doc_id, version_id))."""
-        raise NotImplementedError
+        per (doc_id, version_id); a replace resets created_at)."""
+        with self.transaction():
+            self._conn.execute(
+                "INSERT OR REPLACE INTO pending_docs (doc_id, version_id, run_id, paths, meta, object_sha, pages,"
+                " created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    doc.doc_id,
+                    doc.version_id,
+                    doc.run_id,
+                    _dumps(list(doc.paths)),
+                    _dumps(dict(doc.meta)),
+                    doc.object_sha,
+                    doc.pages,
+                    _now(),
+                ),
+            )
 
     def pending_docs(self, version_id: int | None = None) -> list[PendingDocRow]:
         """Pending docs recorded against `version_id` (all when None), oldest first."""
-        raise NotImplementedError
+        if version_id is None:
+            rows = self._all("SELECT * FROM pending_docs ORDER BY created_at, doc_id")
+        else:
+            rows = self._all(
+                "SELECT * FROM pending_docs WHERE version_id = ? ORDER BY created_at, doc_id", (version_id,)
+            )
+        return [_pending_doc(r) for r in rows]
 
     def add_removed_doc(self, doc_id: str) -> None:
-        """Hide a doc (a removed upload) from the library immediately."""
-        raise NotImplementedError
+        """Hide a doc (a removed upload) from the library immediately. Idempotent."""
+        with self.transaction():
+            self._conn.execute(
+                "INSERT OR IGNORE INTO removed_docs (doc_id, removed_at) VALUES (?, ?)", (doc_id, _now())
+            )
 
     def removed_docs(self) -> set[str]:
-        raise NotImplementedError
+        return {r["doc_id"] for r in self._all("SELECT doc_id FROM removed_docs")}
 
     # Metrics
     def add_metrics(self, run_id: int, rows: Sequence[tuple[str | None, str | None, str, float]]) -> None:
