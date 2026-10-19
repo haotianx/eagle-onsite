@@ -30,13 +30,13 @@ import time
 import traceback
 import warnings
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from ingest import gitinfo, obs, sources, validation
-from ingest.config import Config
+from ingest.config import Config, SourceConfig
 from ingest.contract import Doc, NodeContext, make_chunk_ids, text_hash
 from ingest.fingerprint import dag_fingerprints, env_hash, node_fingerprint, sha256_file
 from ingest.metrics import doc_metrics
@@ -385,7 +385,7 @@ class _Seeder:
         (earlier / DROPPED).unlink()
         data = (self.source.root / TRUNCATED_FROM).read_bytes()
         (earlier / TRUNCATED).write_bytes(data[: len(data) // 2])
-        earlier_source = replace(self.source, root=earlier)
+        earlier_source = SourceConfig(self.source.name, root=earlier, glob=self.source.glob)
         s1 = sources.sync(self.catalog, earlier_source).snapshot_id
         s2 = sources.sync(self.catalog, self.source).snapshot_id
         self.backdate.set("snapshots", {"id": s1}, created_at=self.now - timedelta(days=4, hours=3))

@@ -28,7 +28,7 @@ def config(tmp_path: Path) -> Config:
     return Config(
         repo_root=REPO,
         data_dir=tmp_path / "data",
-        sources=MappingProxyType({"proposals": SourceConfig("proposals", seed.FIXTURES)}),
+        sources=MappingProxyType({"proposals": SourceConfig("proposals", root=seed.FIXTURES)}),
     )
 
 
