@@ -565,3 +565,21 @@ def test_replace_issues_by_source(cat: Catalog) -> None:
     assert [r.code for r in cat.issues(other.id)] == ["s0"]
     cat.replace_issues(v.id, "script", [])
     assert [r.source for r in cat.issues(v.id)] == ["hard", "quality"]
+
+
+def test_doc_metrics_round_trip(tmp_path):
+    from ingest.store.catalog import Catalog, SnapshotDocInput, VersionDocInput
+
+    cat = Catalog(tmp_path / "c.sqlite")
+    cat.cache_put("fp", "d1", "a" * 64, "parquet", 1.5, {"chunks": 3.0, "tokens": 90.0})
+    assert cat.cache_get("fp", "d1").metrics == {"chunks": 3.0, "tokens": 90.0}
+    cat.cache_put("fp", "d2", "b" * 64, "json", None)
+    assert cat.cache_get("fp", "d2").metrics == {}
+    snap = cat.create_snapshot("s", [SnapshotDocInput("d1", ("a.pdf",), 1, 1)], 1)
+    v = cat.create_version(
+        dag="g", node="n", node_fp="fp", snapshot_id=snap, input_versions={}, run_id=None,
+        commit=None, dirty=False, scratch=False, artifact_type="chunk", meta={},
+    )
+    cat.add_version_docs(v.id, [VersionDocInput("d1", "ok", "a" * 64, "parquet", metrics={"chunks": 3.0})])
+    assert cat.version_doc(v.id, "d1").metrics == {"chunks": 3.0}
+    cat.close()

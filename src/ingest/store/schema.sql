@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS cache (
     object_sha TEXT NOT NULL,
     kind TEXT NOT NULL,
     duration_s REAL,
+    metrics TEXT NOT NULL DEFAULT '{}',   -- JSON object: metrics.doc_metrics of the output
     created_at TEXT NOT NULL,
     PRIMARY KEY (node_fp, doc_id)
 );
@@ -118,6 +119,7 @@ CREATE TABLE IF NOT EXISTS version_docs (
     duration_s REAL,
     peak_rss_mb REAL,
     worker_pid INTEGER,
+    metrics TEXT NOT NULL DEFAULT '{}',   -- JSON object: metrics.doc_metrics of the output
     PRIMARY KEY (version_id, doc_id)
 );
 

@@ -71,6 +71,7 @@ class CacheEntry:
     kind: str
     duration_s: float | None
     created_at: str
+    metrics: Mapping[str, float] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -138,6 +139,7 @@ class VersionDocInput:
     duration_s: float | None = None
     peak_rss_mb: float | None = None
     worker_pid: int | None = None
+    metrics: Mapping[str, float] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -207,6 +209,7 @@ def _cache(r: sqlite3.Row) -> CacheEntry:
         kind=r["kind"],
         duration_s=r["duration_s"],
         created_at=r["created_at"],
+        metrics=json.loads(r["metrics"]),
     )
 
 
@@ -267,6 +270,7 @@ def _version_doc(r: sqlite3.Row) -> VersionDocRow:
         duration_s=r["duration_s"],
         peak_rss_mb=r["peak_rss_mb"],
         worker_pid=r["worker_pid"],
+        metrics=json.loads(r["metrics"]),
     )
 
 
@@ -424,13 +428,21 @@ class Catalog:
             out.update((r["doc_id"], _cache(r)) for r in rows)
         return out
 
-    def cache_put(self, node_fp: str, doc_id: str, object_sha: str, kind: str, duration_s: float | None) -> None:
+    def cache_put(
+        self,
+        node_fp: str,
+        doc_id: str,
+        object_sha: str,
+        kind: str,
+        duration_s: float | None,
+        metrics: Mapping[str, float] | None = None,
+    ) -> None:
         """Insert or replace (a forced recompute points the entry at the new object)."""
         with self.transaction():
             self._conn.execute(
-                "INSERT OR REPLACE INTO cache (node_fp, doc_id, object_sha, kind, duration_s, created_at)"
-                " VALUES (?, ?, ?, ?, ?, ?)",
-                (node_fp, doc_id, object_sha, kind, duration_s, _now()),
+                "INSERT OR REPLACE INTO cache (node_fp, doc_id, object_sha, kind, duration_s, metrics, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (node_fp, doc_id, object_sha, kind, duration_s, _dumps(dict(metrics or {})), _now()),
             )
 
     # Runs and events
@@ -537,8 +549,8 @@ class Catalog:
         with self.transaction():
             self._conn.executemany(
                 "INSERT INTO version_docs (version_id, doc_id, status, object_sha, kind, cached, error_type,"
-                " error_message, traceback, duration_s, peak_rss_mb, worker_pid)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " error_message, traceback, duration_s, peak_rss_mb, worker_pid, metrics)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [
                     (
                         version_id,
@@ -553,6 +565,7 @@ class Catalog:
                         d.duration_s,
                         d.peak_rss_mb,
                         d.worker_pid,
+                        _dumps(dict(d.metrics)),
                     )
                     for d in docs
                 ],
