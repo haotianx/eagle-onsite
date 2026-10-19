@@ -1,0 +1,23 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "ingest-ui",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "ingest", "ui", "--port", "8766"],
+      "port": 8766
+    },
+    {
+      "name": "query-app",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "INGEST_DATA_DIR=/Users/haotianxu/Documents/GitHub/eagle-onsite/.ingest",
+        "uv", "run", "--project", "/Users/haotianxu/Documents/GitHub/eagle-onsite/.claude/worktrees/phase-3-query-app-b67451",
+        "ingest", "--repo", "/Users/haotianxu/Documents/GitHub/eagle-onsite/.claude/worktrees/phase-3-query-app-b67451",
+        "ui", "--port", "8767"
+      ],
+      "port": 8767,
+      "url": "http://localhost:8767"
+    }
+  ]
+}
