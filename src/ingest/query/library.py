@@ -154,3 +154,7 @@ class LibraryCache:
     def passage(self, chunk_id: str) -> Passage | None:
         """A row by chunk id, or None."""
         raise NotImplementedError
+
+    def close(self) -> None:
+        """Close the catalog connection."""
+        raise NotImplementedError
