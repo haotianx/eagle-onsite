@@ -1,0 +1,43 @@
+[project]
+name = "ingest"
+version = "0.1.0"
+description = "Document ingestion pipeline: engineer-defined DAGs that parse, chunk and embed documents."
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "docling",
+    "ocrmac",
+    "sentence-transformers",
+    "torch",
+    "transformers",
+    "numpy",
+    "pyarrow",
+    "pypdfium2",
+    "pyyaml",
+    "typer",
+    "watchfiles",
+    "psutil",
+]
+
+[project.scripts]
+ingest = "ingest.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "pytest-timeout",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ingest"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-m 'not corpus'"
+markers = [
+    "models: loads real ML models (Docling, Qwen3); slow, needs models pulled",
+    "corpus: runs against /Users/Shared/proposals; opt-in via INGEST_REAL_CORPUS=1",
+]

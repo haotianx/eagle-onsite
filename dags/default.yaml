@@ -1,0 +1,23 @@
+name: default
+source: proposals
+nodes:
+  ocr:
+    script: nodes/docling_parse.py
+    params:
+      ocr_engine: ocrmac
+    timeout: 300
+    workers: 4
+  chunk:
+    script: nodes/hybrid_chunk.py
+    inputs: [ocr]
+    params:
+      max_tokens: 512
+      tokenizer: Qwen/Qwen3-Embedding-0.6B
+    workers: 4
+  embed:
+    script: nodes/embed.py
+    inputs: [chunk]
+    params:
+      model: Qwen/Qwen3-Embedding-0.6B
+      batch_size: 32
+    workers: 1

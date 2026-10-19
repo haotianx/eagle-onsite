@@ -34,7 +34,7 @@ Reproducibility (same code + inputs → same result; lineage on every version) �
 
 - One YAML file per DAG in git (`dags/<name>.yaml`); scripts in git (`nodes/*.py`, checks in `nodes/checks/*.py`). Authoring is git-only; the UI views and runs DAGs but never edits them.
 - Inputs reference node names; the root node reads the DAG's `source`. Nodes may have several inputs; a DAG may have several terminal nodes. No per-doc routing in YAML — do that inside a script.
-- No cross-DAG references; DAGs share work through identical nodes (same fingerprint → same version).
+- No cross-DAG references; DAGs share work through the per-doc cache — an identical node in another DAG reuses the same cached outputs (§7).
 
 ```yaml
 name: default
@@ -44,6 +44,7 @@ nodes:
     script: nodes/docling_parse.py
     params: { ocr_engine: ocrmac }
     timeout: 300            # seconds per doc; not part of the fingerprint
+    workers: 4              # parallel worker processes; not part of the fingerprint
   chunk:
     script: nodes/hybrid_chunk.py
     inputs: [ocr]
@@ -52,22 +53,27 @@ nodes:
     script: nodes/embed.py
     inputs: [chunk]
     params: { model: Qwen/Qwen3-Embedding-0.6B }
+    workers: 1              # one process on the GPU
     # checks: nodes/checks/embed.py   (optional)
 ```
 
 ## 6. Node scripts
 
 - `setup(params) -> ctx` — optional; once per worker process (load models).
-- `run(doc, inputs, params, ctx) -> records` — per document. `doc` = id, paths, size, file path. The root node's input is the PDF; other nodes receive their input nodes' records for this doc. Return a `dict` (stored as JSON) or `list[dict]` (stored as Parquet rows).
+- `run(doc, inputs, params, ctx) -> records` — per document. `doc` = id, paths, size, file path. The root node's input is the PDF; other nodes receive their input nodes' records for this doc. Return a `dict` (stored as JSON), or `list[dict]` or a `pyarrow.Table` (stored as Parquet).
 - `run_corpus(docs, inputs, params, ctx) -> records` — whole corpus; records keyed by doc id plus optional corpus-wide files; cached as a whole.
 - A script defines `run` or `run_corpus`; the framework detects which.
+- `ARTIFACT_TYPE = "parse" | "chunk" | "embed"` — optional module constant that opts a script into the built-in checks (§10) and Compare metrics for that type.
+- `describe(params) -> dict` — optional; version metadata stored with every version (e.g. model id, revision, dimension, metric, query instruction).
+- Node YAML `timeout` and `workers` control execution only and are not part of the fingerprint.
 - Scripts log with standard Python `logging`; the framework captures it (§11). `ctx.debug(name, data)` saves a debug file (e.g. a rendered page image or intermediate JSON) for the current doc — kept in scratch runs only, a no-op otherwise.
 - All scripts share one locked Python environment (uv lockfile in git). Model weights are pinned by revision in params.
 
 ## 7. Artifacts, versions, promotion
 
-- A version's fingerprint = (script hash, params, input versions, environment hash). Lineage: git commit, dirty flag, script hash, params, input versions, lockfile and model revisions, timing. Checks are fingerprinted separately (§10).
-- Per-doc outputs are cached by (node fingerprint, doc hash); a version is a manifest of doc → cached output, so reused docs cost nothing.
+- A node's fingerprint = hash(script hash, params, environment hash, input nodes' fingerprints). It chains through upstream code and params but not through which docs exist, so adding docs never changes it. Checks are fingerprinted separately (§10).
+- Per-doc outputs are cached by (node fingerprint, doc hash). Outputs are stored under their own content hash, and a cache index maps (node fingerprint, doc hash) → output, so a forced recompute never alters what older versions reference.
+- A version is a manifest of doc → output for one snapshot, so reused docs cost nothing. Lineage: node fingerprint, input versions, snapshot, git commit, dirty flag, script hash, params, lockfile and model revisions, timing.
 - Runs produce **candidate** versions; an engineer **promotes** one to make it current. Promotion is per node and does not promote upstream versions. Rollback = promote an older version.
 - Promotable only if built over the full snapshot from committed code. Subset or working-tree runs are **scratch**: inspectable and searchable, never promotable.
 - Node states: fresh · stale (code or params changed, or current version built from inputs that aren't current) · candidate available · running · failed · never run.
@@ -162,7 +168,7 @@ Promote confirmation names the version being replaced, lists issues, and warns w
 
 - **Stack**: Python 3.13 (uv-managed; system Python 3.15 is too new for torch/Docling wheels); FastAPI + SSE; React + TypeScript (Vite), PDF.js, a graph library; typed client generated from OpenAPI.
 - **Engine**: custom and small — plans node order, resolves input versions, fingerprints, skips cached docs, runs per-doc nodes on a process pool and GPU nodes in one batched process, runs validation, writes versions. Runs execute in a worker subprocess so the API stays responsive.
-- **Storage**: SQLite catalog + content-addressed objects `objects/<node fingerprint>/<doc hash>.{json,parquet}` under `.ingest/` at the repo root (gitignored; overridable via `ingest.toml` or `INGEST_DATA_DIR`).
+- **Storage**: SQLite catalog (single writer: the run's parent process) + content-addressed objects `objects/<sha[:2]>/<sha>.{json,parquet}` and a cache index (node fingerprint, doc hash) → object, under `.ingest/` at the repo root (gitignored; overridable via `ingest.toml` or `INGEST_DATA_DIR`).
 - **Catalog tables**: sources, snapshots, snapshot_docs (incl. path metadata and sync flags), versions, version_docs (incl. error, traceback, timing, peak memory), version_issues, current, runs, run_events, run_metrics. Logs and debug files live on disk under `.ingest/runs/<run id>/`, indexed by node and doc.
 - **Search (UI)**: exact cosine over a version's vectors in memory (~41K × 1024); queries embedded with each side's recorded model.
 
@@ -173,16 +179,17 @@ pyproject.toml  uv.lock  ingest.toml  .gitignore (.ingest/, web/node_modules/, w
 dags/default.yaml
 nodes/docling_parse.py  nodes/hybrid_chunk.py  nodes/embed.py  nodes/checks/
 src/ingest/
-  contract.py      script loading; Doc, records, issue types
+  contract.py      shared types: Doc, NodeContext, Issue, record helpers
+  scripts.py       script and checks loading (setup / run / run_corpus / describe detection)
   spec.py          DAG load + validation
   fingerprint.py   script, params, env, checks, node/version fingerprints
   gitinfo.py       HEAD, dirty paths per node, repo watcher
   config.py        ingest.toml + env
-  store/catalog.py store/objects.py
+  store/catalog.py store/objects.py store/schema.sql
   sources.py       sync → snapshot, path metadata, diff
   validation.py    hard, quality and script-declared checks; revalidate
   obs.py           logging setup, per-doc capture, metrics, debug files
-  engine/planner.py engine/executor.py
+  engine/planner.py engine/executor.py engine/worker.py
   state.py         node states, promotion rules
   publish.py       load_table, dup_count, published Parquet
   metrics.py       Compare metrics
@@ -200,8 +207,13 @@ web/
 
 Implemented with the repo's `parallel-implement` skill: scaffolding and the shared interfaces (§6, §10, §11, §12, §15, API) first, then one subagent per component on non-overlapping files; each tests and commits locally (no push), on the current branch.
 
-- **Phase 1 — engine slice**: (A) contract, spec, fingerprint, gitinfo, config · (B) catalog, objects · (C) sources and path metadata · (D) default nodes · (E) validation · (F) logging, metrics, debug files · (G) planner, executor (timeouts, crash isolation, cancel), state · (H) publish · (I) CLI incl. doctor and models pull. Gate: CLI end to end on fixtures, then 25 real proposals.
-- **Phase 2 — API and UI**: (J) API, metrics, search · (K) web scaffold and shared components · then (L) DAGs, DAG detail, Run launcher · (M) Runs (logs, timings, cancel) · (N) Version, Compare · (O) Document · (P) Search · (Q) Sources.
+- **Phase 1 — engine slice**, in dependency waves so each component tests against real code:
+  - Wave 1: (A) config, spec, scripts, fingerprint, gitinfo · (B) catalog, objects · (D) default nodes · (F) logging, run metrics, debug files
+  - Wave 2: (C) sources and path metadata · (E) validation · (H) publish and Compare metrics
+  - Wave 3: (G) planner, executor and worker (timeouts, crash isolation, cancel), state
+  - Wave 4: (I) CLI incl. doctor and models pull
+  - Gate: CLI end to end on fixtures, then 25 real proposals.
+- **Phase 2 — API and UI**: (J) API, search · (K) web scaffold and shared components · then (L) DAGs, DAG detail, Run launcher · (M) Runs (logs, timings, cancel) · (N) Version, Compare · (O) Document · (P) Search · (Q) Sources.
 
 **Fixtures** (~1.3 MB, real proposals including client names and fees, folder structure kept):
 - `2292 SZEKERES/CONTRACT/AEROTECH/2292 Szekeres Proposal.pdf` — born-digital, fees, 2 pages
@@ -218,7 +230,7 @@ Implemented with the repo's `parallel-implement` skill: scaffolding and the shar
 | Docling, HybridChunker | MIT | Yes |
 | Docling Heron layout model | Apache 2.0 | Yes |
 | Docling TableFormer weights | CDLA-Permissive-2.0 | Yes |
-| Apple Vision via ocrmac | macOS framework; confirm ocrmac's license | Yes on Apple hardware |
+| Apple Vision via ocrmac | macOS framework; ocrmac wrapper MIT | Yes on Apple hardware |
 | Qwen3-Embedding-0.6B | Apache 2.0 | Yes |
 | Swap-ins: PaddleOCR-VL-1.6, Qwen3-VL-Embedding (Apache 2.0), harrier-oss-v1 (MIT) | as listed | Yes — confirm on official model pages |
 | Excluded: Marker/Surya, Chandra 2 (modified OpenRAIL-M), jina-v5 (CC BY-NC), MinerU (unverified) | — | No / unknown |
