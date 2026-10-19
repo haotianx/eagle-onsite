@@ -15,10 +15,23 @@ import {
   useChat,
 } from "../api";
 import { usePdfPanel } from "../pdf-panel";
+import { navigateToChat, useChatId } from "../route";
 import { json, mockFetch, renderChat } from "../test-utils";
 import { Composer } from "./Composer";
 
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
+
+const navigation = vi.hoisted(() => ({ onNavigate: (_chatId: string | null) => {} }));
+vi.mock("../route", async (importOriginal) => {
+  const route = await importOriginal<typeof import("../route")>();
+  return {
+    ...route,
+    navigateToChat: (...args: Parameters<typeof route.navigateToChat>) => {
+      navigation.onNavigate(args[0]);
+      route.navigateToChat(...args);
+    },
+  };
+});
 
 function card(extra: Partial<UploadCard> = {}): UploadCard {
   return {
@@ -71,7 +84,7 @@ function mockApi(routes: Routes = {}, { libraryReady = true, detail = chat() } =
   const asks: unknown[] = [];
   const fetchMock = mockFetch({
     "GET /api/chat/chats": { chats: [], library_ready: libraryReady },
-    "GET /api/chat/chats/:id": detail,
+    "GET /api/chat/chats/:id": (_: Request, { id }: Record<string, string>) => ({ ...detail, id }),
     "POST /api/chat/chats/:id/messages": async (request: Request) => {
       asks.push(await request.json());
       return askResponse;
@@ -85,6 +98,13 @@ function calls(fetchMock: ReturnType<typeof mockFetch>, method: string, path: st
   return fetchMock.mock.calls
     .map(([input]) => input as Request)
     .filter((r) => r.method === method && new URL(r.url).pathname === path);
+}
+
+/** The composer of the chat in the URL, as the chat page renders it. */
+function CurrentChat() {
+  const chatId = useChatId();
+  const { data } = useChat(chatId);
+  return chatId != null && data == null ? null : <Composer chat={data ?? null} />;
 }
 
 /** The composer of chat c1, following its cached detail. */
@@ -131,13 +151,32 @@ describe("Composer", () => {
     const { fetchMock, asks } = mockApi({
       "POST /api/chat/chats": { id: "new1", title: null, generating: false, updated_at: "2026-10-19T12:00:00Z" },
     });
-    renderChat(<Composer chat={null} />);
+    const { queryClient } = renderChat(<CurrentChat />);
+    let cached: ChatDetail | undefined;
+    navigation.onNavigate = (chatId) => {
+      cached = queryClient.getQueryData<ChatDetail>(chatKeys.chat(chatId!));
+    };
+    const field = textbox();
 
-    await userEvent.type(textbox(), "Which proposals are for Grove Plaza?{Enter}");
+    await userEvent.type(field, "Which proposals are for Grove Plaza?{Enter}");
     await waitFor(() => expect(window.location.pathname).toBe("/chat/new1"));
     expect(calls(fetchMock, "POST", "/api/chat/chats")).toHaveLength(1);
-    expect(calls(fetchMock, "POST", "/api/chat/chats/new1/messages")).toHaveLength(1);
     expect(asks).toEqual([{ text: "Which proposals are for Grove Plaza?", scope: null, upload_ids: [] }]);
+    // The new chat's detail is cached with the question and the generating answer.
+    expect(cached).toMatchObject({ id: "new1", generating: true, messages: [{ id: "q2" }, { id: "a2" }] });
+    // The composer stays mounted as the new chat opens.
+    expect(textbox()).toBe(field);
+    expect(field).toHaveValue("");
+  });
+
+  it("starts a fresh draft when another chat opens", async () => {
+    mockApi();
+    renderChat(<CurrentChat />, { path: "/chat/c1" });
+    await screen.findByPlaceholderText("Ask a question");
+    await userEvent.type(textbox(), "Draft");
+
+    act(() => navigateToChat(null));
+    expect(textbox()).toHaveValue("");
   });
 
   it("follows an upload to ready, switches the scope and attaches it", async () => {

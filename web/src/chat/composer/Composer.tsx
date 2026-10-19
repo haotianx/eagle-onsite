@@ -1,4 +1,5 @@
-import { useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
 import { toast } from "sonner";
 
 import {
@@ -12,7 +13,16 @@ import {
   PromptInputTools,
 } from "@/components/ai-elements/prompt-input";
 
-import { type ChatDetail, type UploadCard, useAsk, useChats, useCreateChat, useRemoveUpload, useStop } from "../api";
+import {
+  type ChatDetail,
+  chatKeys,
+  type UploadCard,
+  useAsk,
+  useChats,
+  useCreateChat,
+  useRemoveUpload,
+  useStop,
+} from "../api";
 import { DocumentCard } from "../DocumentCard";
 import { usePdfPanel } from "../pdf-panel";
 import { navigateToChat } from "../route";
@@ -27,12 +37,37 @@ export interface ComposerProps {
 }
 
 /** The question box: unsent document cards, the text field, `+`, the scope chip and send / stop.
- * Its draft (text, cards, scope) belongs to one chat. */
+ * Its draft (text, cards, scope) belongs to one chat: it resets when another chat opens, but not
+ * when a new chat opens as the chat its own send created. */
 export function Composer(props: ComposerProps) {
-  return <ChatComposer key={props.chat?.id ?? ""} {...props} />;
+  const chatId = props.chat?.id ?? null;
+  const [draft, setDraft] = useState<{ chatId: string | null; key: number; created: string | null }>({
+    chatId,
+    key: 0,
+    created: null,
+  });
+  if (draft.chatId !== chatId) {
+    const adopted = draft.chatId == null && chatId != null && chatId === draft.created;
+    setDraft({ chatId, key: adopted ? draft.key : draft.key + 1, created: null });
+  }
+  return (
+    <ChatComposer
+      key={draft.key}
+      created={draft.created}
+      onCreated={(id) => setDraft((d) => ({ ...d, created: id }))}
+      {...props}
+    />
+  );
 }
 
-function ChatComposer({ chat, className }: ComposerProps) {
+interface ChatComposerProps extends ComposerProps {
+  /** The chat this new chat's send created (kept if its question then failed, for the next send). */
+  created: string | null;
+  onCreated(chatId: string): void;
+}
+
+function ChatComposer({ chat, className, created, onCreated }: ChatComposerProps) {
+  const queryClient = useQueryClient();
   const libraryReady = useChats().data?.library_ready !== false;
   const createChat = useCreateChat();
   const ask = useAsk();
@@ -43,8 +78,6 @@ function ChatComposer({ chat, className }: ComposerProps) {
   const [text, setText] = useState("");
   const [scope, setScope] = useState<string | null>(chat?.scope?.doc_id ?? null);
   const upload = useUpload({ onReady: (card) => setScope(card.doc_id) });
-  // A chat created by a send whose question then failed; the next send reuses it.
-  const createdChatId = useRef<string | null>(null);
 
   const options = scopeOptions(chat, upload.cards);
   const effectiveScope = options.some((o) => o.docId === scope) ? scope : null;
@@ -64,10 +97,18 @@ function ChatComposer({ chat, className }: ComposerProps) {
     if (!canSend) return;
     const sent = upload.cards.filter((u) => !u.pending && u.card.status === "ready");
     try {
-      let chatId = chat?.id ?? createdChatId.current;
+      let chatId = chat?.id ?? created;
       if (chatId == null) {
         chatId = (await createChat.mutateAsync()).id;
-        createdChatId.current = chatId;
+        onCreated(chatId);
+        // Seeded so the question and the generating answer land in it and the chat shows at once.
+        queryClient.setQueryData<ChatDetail>(chatKeys.chat(chatId), {
+          id: chatId,
+          title: null,
+          scope: null,
+          generating: false,
+          messages: [],
+        });
       }
       await ask.mutateAsync({
         chatId,
