@@ -244,7 +244,8 @@ class Uploads:
         return candidate
 
     async def _failed(self, doc_id: str, name: str, reason: str) -> UploadRow:
-        row = self.store.add_upload(doc_id=doc_id, filename=name, status="failed", removable=True, error=reason)
+        # Nothing was stored, so there is nothing to remove from the library.
+        row = self.store.add_upload(doc_id=doc_id, filename=name, status="failed", removable=False, error=reason)
         await self._notify()
         return row
 
@@ -312,6 +313,9 @@ class Uploads:
             await asyncio.to_thread(runner.start)
         except LookupError:
             log.warning("single-doc worker not started: no current version of %s", self.qconfig.ref)
+            return None
+        except Exception:
+            log.exception("single-doc worker failed to start")
             return None
         self._runner = runner
         return runner
