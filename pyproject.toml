@@ -16,6 +16,10 @@ dependencies = [
     "typer",
     "watchfiles",
     "psutil",
+    "anthropic>=1.15",
+    "python-multipart>=0.0.32",
+    "fastapi>=0.149",
+    "uvicorn>=0.54",
 ]
 
 [project.scripts]
