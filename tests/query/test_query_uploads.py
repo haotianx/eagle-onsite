@@ -521,3 +521,20 @@ def test_close_leaves_no_running_tasks(env: Env) -> None:
 
     env.promote()
     run(main())
+
+
+def test_start_survives_a_reprocessing_failure(env: Env, monkeypatch: pytest.MonkeyPatch) -> None:
+    def broken(catalog: Any, config: Any, dag: str, node: str) -> list[str]:
+        raise RuntimeError("catalog unavailable")
+
+    monkeypatch.setattr(single_doc, "docs_to_reprocess", broken)
+
+    async def main() -> None:
+        up = env.uploads()
+        await up.start()
+        row = await up.add("a.pdf", ADDENDUM.read_bytes())
+        assert row.status == "processing"
+        await up.close()
+
+    env.promote()
+    run(main())

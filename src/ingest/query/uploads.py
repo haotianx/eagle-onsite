@@ -126,9 +126,13 @@ class Uploads:
         self._version_id = current.id if current else None
         if current is not None:
             await self._ensure_runner()
-        async with self._lock:
-            resubmitted = await self._resume_leftovers()
-            await self._reprocess(skip=resubmitted)
+        try:
+            async with self._lock:
+                resubmitted = await self._resume_leftovers()
+                await self._reprocess(skip=resubmitted)
+        except Exception:
+            # Uploads left over or not in the current version stay as they are; the chat still starts.
+            log.exception("resubmitting uploads at startup failed")
         self._watcher = asyncio.create_task(self._watch_promotions())
 
     async def close(self) -> None:
