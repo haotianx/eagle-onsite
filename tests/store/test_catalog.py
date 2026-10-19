@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from ingest.contract import Issue
-from ingest.store.catalog import Catalog, SnapshotDocInput, VersionDocInput, VersionRow
+from ingest.store.catalog import Catalog, PendingDocInput, SnapshotDocInput, VersionDocInput, VersionRow
 
 
 @pytest.fixture
@@ -341,6 +341,21 @@ def test_list_and_active_runs(cat: Catalog) -> None:
     assert [r.id for r in cat.active_runs()] == [b]
 
 
+def test_run_kind(cat: Catalog) -> None:
+    a = cat.create_run("default", {}, scratch=False, commit=None, dirty=False)
+    b = cat.create_run("default", {"doc_id": "d1"}, scratch=False, commit="abc", dirty=False, kind="single_doc")
+    assert cat.get_run(a).kind == "dag"
+    assert cat.get_run(b).kind == "single_doc"
+    assert [r.id for r in cat.list_runs()] == [b, a]
+    assert [r.id for r in cat.active_runs()] == [a]
+    assert [r.id for r in cat.active_runs("default")] == [a]
+    assert [r.id for r in cat.active_runs(kind="single_doc")] == [b]
+    assert [r.id for r in cat.active_runs("default", kind=None)] == [a, b]
+    assert cat.active_runs("other", kind=None) == []
+    with pytest.raises(sqlite3.IntegrityError):
+        cat.create_run("default", {}, scratch=False, commit=None, dirty=False, kind="bogus")  # type: ignore[arg-type]
+
+
 def test_events_after_id(cat: Catalog) -> None:
     run_id = cat.create_run("default", {}, scratch=False, commit=None, dirty=False)
     other = cat.create_run("default", {}, scratch=False, commit=None, dirty=False)
@@ -524,6 +539,42 @@ def test_current_and_promotion(cat: Catalog) -> None:
         cat.set_current("default", "ocr", version(cat, sid).id)
     with pytest.raises(KeyError):
         cat.set_current("default", "ocr", 999)
+
+
+# Pending and removed docs
+
+
+def test_pending_docs(cat: Catalog) -> None:
+    sid = snapshot(cat)
+    v1 = complete(cat, sid, "embed")
+    v2 = complete(cat, sid, "embed")
+    run = cat.create_run("default", {}, scratch=False, commit=None, dirty=False, kind="single_doc")
+    assert cat.pending_docs() == []
+    cat.add_pending_doc(PendingDocInput("u1", v1.id, run, ("uploads/u1.pdf",), {"filename": "u1.pdf"}, "a" * 64, 3))
+    cat.add_pending_doc(PendingDocInput("u2", v1.id, run, ("uploads/u2.pdf",), {}, "b" * 64))
+    cat.add_pending_doc(PendingDocInput("u1", v2.id, run, ("uploads/u1.pdf",), {}, "c" * 64, 3))
+    rows = cat.pending_docs(v1.id)
+    assert [(r.doc_id, r.object_sha[0], r.pages) for r in rows] == [("u1", "a", 3), ("u2", "b", None)]
+    assert rows[0].paths == ("uploads/u1.pdf",) and rows[0].meta == {"filename": "u1.pdf"}
+    assert (rows[0].version_id, rows[0].run_id) == (v1.id, run) and is_utc_iso(rows[0].created_at)
+    assert [(r.doc_id, r.version_id) for r in cat.pending_docs()] == [("u1", v1.id), ("u2", v1.id), ("u1", v2.id)]
+    # Replacing a (doc_id, version_id) row updates it and moves it to the end.
+    cat.add_pending_doc(PendingDocInput("u1", v1.id, run, ("uploads/u1.pdf",), {}, "d" * 64, 4))
+    assert [(r.doc_id, r.object_sha[0], r.pages) for r in cat.pending_docs(v1.id)] == [("u2", "b", None), ("u1", "d", 4)]
+    assert len(cat.pending_docs()) == 3
+    assert cat.pending_docs(999) == []
+    with pytest.raises(sqlite3.IntegrityError):
+        cat.add_pending_doc(PendingDocInput("u3", 999, run, (), {}, "e" * 64))
+    cat.delete_version(v2.id)
+    assert [r.version_id for r in cat.pending_docs()] == [v1.id, v1.id]
+
+
+def test_removed_docs(cat: Catalog) -> None:
+    assert cat.removed_docs() == set()
+    cat.add_removed_doc("u1")
+    cat.add_removed_doc("u2")
+    cat.add_removed_doc("u1")
+    assert cat.removed_docs() == {"u1", "u2"}
 
 
 # Issues

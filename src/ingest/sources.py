@@ -1,4 +1,4 @@
-"""Sync a source folder into an immutable snapshot."""
+"""Sync a source's folders into an immutable snapshot."""
 
 from __future__ import annotations
 
@@ -64,24 +64,58 @@ def check_pdf(path: Path) -> tuple[tuple[str, ...], str | None]:
     return (), None
 
 
+def resolve_path(source: SourceConfig, rel_path: str) -> Path:
+    """Absolute file for a source-relative path: "<folder name>/…" for a folder after the first,
+    else relative to the first folder."""
+    folder, rest = _split(source, rel_path)
+    return folder / rest
+
+
+def meta_for(source: SourceConfig, rel_path: str) -> dict[str, Any]:
+    """Path metadata: parse_path_meta for the first folder, only `filename` for the others."""
+    folder, rest = _split(source, rel_path)
+    if folder == source.folders[0]:
+        return parse_path_meta(rel_path)
+    return {"job_number": None, "project": None, "subfolder": None, "filename": PurePosixPath(rest).name}
+
+
+def _split(source: SourceConfig, rel_path: str) -> tuple[Path, str]:
+    head, sep, rest = rel_path.partition("/")
+    if sep:
+        for folder in source.folders[1:]:
+            if folder.name == head:
+                return folder, rest
+    return source.folders[0], rel_path
+
+
 def scan_source(source: SourceConfig, catalog: Catalog | None = None) -> tuple[list[SnapshotDocInput], int]:
-    """Walk source.root for files matching source.glob (suffix compared case-insensitively),
+    """Walk source.folders for files matching source.glob (suffix compared case-insensitively),
     hash them (reusing catalog.file_index_get entries whose size and mtime_ns match), check
-    PDFs, and collapse identical files into one doc whose `paths` are sorted. meta comes from
-    the primary (first) path. Updates the file index when `catalog` is given. Returns
-    (docs sorted by primary path, number of files)."""
-    root = source.root
-    if not root.is_dir():
-        raise FileNotFoundError(f"source {source.name!r}: {root} is not a directory")
+    PDFs, and collapse identical files into one doc whose `paths` are sorted. Paths in folders
+    after the first are prefixed with the folder name; those folders may not exist yet. meta
+    comes from the primary (first) path. Updates the file index when `catalog` is given.
+    Returns (docs sorted by primary path, number of files)."""
+    primary_folder, *others = source.folders
+    if not primary_folder.is_dir():
+        raise FileNotFoundError(f"source {source.name!r}: {primary_folder} is not a directory")
+    prefixes = {f.name for f in others}
     index = catalog.file_index_get(source.name) if catalog is not None else {}
     entries: dict[str, tuple[int, int, str]] = {}
-    for rel in _walk(root, source.glob):
-        st = (root / rel).stat()
+    files: list[tuple[str, Path]] = []
+    for rel in _walk(primary_folder, source.glob):
+        if rel.partition("/")[0] in prefixes and "/" in rel:
+            raise ValueError(f"source {source.name!r}: {primary_folder / rel} clashes with folder prefix")
+        files.append((rel, primary_folder / rel))
+    for folder in others:
+        if folder.is_dir():
+            files.extend((f"{folder.name}/{rel}", folder / rel) for rel in _walk(folder, source.glob))
+    for rel, path in files:
+        st = path.stat()
         cached = index.get(rel)
         if cached is not None and cached[0] == st.st_size and cached[1] == st.st_mtime_ns:
             sha = cached[2]
         else:
-            sha = sha256_file(root / rel)
+            sha = sha256_file(path)
         entries[rel] = (st.st_size, st.st_mtime_ns, sha)
     if catalog is not None:
         catalog.file_index_put(source.name, entries)
@@ -94,14 +128,15 @@ def scan_source(source: SourceConfig, catalog: Catalog | None = None) -> tuple[l
         paths.sort()
         primary = paths[0]
         size, mtime_ns, _ = entries[primary]
-        flags, reason = check_pdf(root / primary) if primary.lower().endswith(".pdf") else ((), None)
+        file = resolve_path(source, primary)
+        flags, reason = check_pdf(file) if primary.lower().endswith(".pdf") else ((), None)
         docs.append(
             SnapshotDocInput(
                 doc_id=sha,
                 paths=tuple(paths),
                 size=size,
                 mtime_ns=mtime_ns,
-                meta=parse_path_meta(primary),
+                meta=meta_for(source, primary),
                 flags=flags,
                 flag_reason=reason,
             )
@@ -111,7 +146,7 @@ def scan_source(source: SourceConfig, catalog: Catalog | None = None) -> tuple[l
 
 
 def _walk(root: Path, glob: str) -> Iterator[str]:
-    """Source-relative POSIX paths of non-hidden files matching `glob` (case-insensitive)."""
+    """Folder-relative POSIX paths of non-hidden files matching `glob` (case-insensitive)."""
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if not d.startswith(".")]
         base = PurePosixPath(Path(dirpath).relative_to(root).as_posix())
@@ -180,12 +215,12 @@ def diff_snapshots(catalog: Catalog, old_id: int, new_id: int) -> SnapshotDiff:
 
 
 def to_doc(row: SnapshotDocRow, source: SourceConfig) -> Doc:
-    """contract.Doc for a snapshot row, with file = source.root / paths[0]."""
+    """contract.Doc for a snapshot row, with file = resolve_path(source, paths[0])."""
     return Doc(
         id=row.doc_id,
         paths=row.paths,
         size=row.size,
-        file=source.root / row.paths[0],
+        file=resolve_path(source, row.paths[0]),
         meta=dict(row.meta),
         flags=row.flags,
     )

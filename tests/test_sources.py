@@ -39,6 +39,13 @@ def source(root: Path) -> SourceConfig:
     return SourceConfig(name="proposals", root=root)
 
 
+@pytest.fixture
+def uploads(tmp_path: Path) -> Path:
+    d = tmp_path / "data" / "uploads"
+    d.mkdir(parents=True)
+    return d
+
+
 @pytest.mark.parametrize(
     ("rel", "expected"),
     [
@@ -222,3 +229,55 @@ def test_doc_meta_columns(cat: Catalog, fixtures_dir: Path) -> None:
         "subfolder": "CONTRACT/AEROTECH",
         "filename": "2292 Szekeres Proposal.pdf",
     }
+
+
+def test_two_folder_source(cat: Catalog, src_dir: Path, uploads: Path, fixtures_dir: Path) -> None:
+    src = SourceConfig(name="proposals", folders=(src_dir, uploads))
+    shutil.copy(fixtures_dir / ELLIOT, uploads / "Foo.pdf")
+    (uploads / "sub").mkdir()
+    shutil.copy(fixtures_dir / SZEKERES, uploads / "sub" / "2292 Bar.pdf")
+    docs, files = scan_source(src)
+    assert files == 9 and len(docs) == 6
+    by_id = {d.doc_id: d for d in docs}
+    elliot = by_id[sha256_file(fixtures_dir / ELLIOT)]
+    assert elliot.paths == (ELLIOT, "uploads/Foo.pdf")
+    assert elliot.meta["job_number"] == "3002"
+    szekeres = by_id[sha256_file(fixtures_dir / SZEKERES)]
+    assert szekeres.paths == (SZEKERES, "uploads/sub/2292 Bar.pdf")
+
+    (src_dir / ELLIOT).unlink()
+    result = sync(cat, src)
+    row = cat.snapshot_doc(result.snapshot_id, elliot.doc_id)
+    assert row.paths == ("uploads/Foo.pdf",)
+    assert dict(row.meta) == {"job_number": None, "project": None, "subfolder": None, "filename": "Foo.pdf"}
+    doc = sources.to_doc(row, src)
+    assert doc.file == uploads / "Foo.pdf" and doc.id == sha256_file(doc.file)
+    assert "uploads/Foo.pdf" in cat.file_index_get("proposals")
+
+
+def test_resolve_path_and_meta_for(src_dir: Path, uploads: Path) -> None:
+    src = SourceConfig(name="proposals", folders=(src_dir, uploads))
+    assert sources.resolve_path(src, SZEKERES) == src_dir / SZEKERES
+    assert sources.resolve_path(src, "uploads/a/Foo.pdf") == uploads / "a" / "Foo.pdf"
+    assert sources.resolve_path(src, "uploads") == src_dir / "uploads"
+    assert sources.meta_for(src, SZEKERES) == parse_path_meta(SZEKERES)
+    assert sources.meta_for(src, "uploads/a/Foo.pdf") == {
+        "job_number": None,
+        "project": None,
+        "subfolder": None,
+        "filename": "Foo.pdf",
+    }
+
+
+def test_missing_second_folder_is_empty(fixtures_dir: Path, tmp_path: Path) -> None:
+    docs, files = scan_source(SourceConfig(name="proposals", folders=(fixtures_dir, tmp_path / "uploads")))
+    assert (len(docs), files) == (6, 7)
+    with pytest.raises(FileNotFoundError):
+        scan_source(SourceConfig(name="proposals", folders=(tmp_path / "missing", fixtures_dir)))
+
+
+def test_primary_folder_clashing_with_prefix(src_dir: Path, uploads: Path) -> None:
+    (src_dir / "uploads").mkdir()
+    shutil.copy(src_dir / ELLIOT, src_dir / "uploads" / "x.pdf")
+    with pytest.raises(ValueError):
+        scan_source(SourceConfig(name="proposals", folders=(src_dir, uploads)))
