@@ -18,6 +18,8 @@ dependencies = [
     "psutil",
     "fastapi",
     "uvicorn",
+    "anthropic",
+    "python-multipart",
 ]
 
 [project.scripts]
