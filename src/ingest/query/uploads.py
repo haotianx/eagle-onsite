@@ -278,7 +278,6 @@ class Uploads:
         if runner is None:
             return await self._failed(doc_id, name, "Library isn't ready")
         if any(r.removed for r in rows):
-            await asyncio.to_thread(self.catalog.restore_doc, doc_id)
             self.library.unhide(doc_id)
             self.store.set_doc_removed(doc_id, False)
         existing = self._stored_file(doc_id)

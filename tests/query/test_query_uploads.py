@@ -99,7 +99,6 @@ class Env:
     catalog: Catalog
     runners: list[FakeRunner] = field(default_factory=list)
     removed: list[str] = field(default_factory=list)
-    restored: list[str] = field(default_factory=list)
     reprocess: list[str] = field(default_factory=list)
 
     def uploads(self, **kw: Any) -> Uploads:
@@ -153,7 +152,6 @@ def env(config: Config, monkeypatch: pytest.MonkeyPatch) -> Any:
     e = Env(config, store, FakeLibrary(store), catalog)
     # Phase 1 stubs, implemented later on main.
     monkeypatch.setattr(Catalog, "add_removed_doc", lambda self, doc_id: e.removed.append(doc_id))
-    monkeypatch.setattr(Catalog, "restore_doc", lambda self, doc_id: e.restored.append(doc_id), raising=False)
     monkeypatch.setattr(single_doc, "docs_to_reprocess", lambda catalog, config, dag, node: list(e.reprocess))
     yield e
     catalog.close()
@@ -406,13 +404,12 @@ def test_reupload_of_removed_doc_restores_it(env: Env) -> None:
         env.library.pending.discard(row.doc_id)
 
         again = await up.add("a.pdf", ADDENDUM.read_bytes())
-        assert env.restored == [row.doc_id]
         assert env.library.unhidden == [row.doc_id]
         assert row.doc_id not in env.library.hidden
         assert not any(r.removed for r in env.store.uploads_for_doc(row.doc_id))
         assert (again.status, again.path) == ("processing", "a.pdf")
         assert env.stored() == ["a.pdf"]
-        assert len(env.runner.submitted) == 2
+        assert env.runner.submitted == [env.config.uploads_dir / "a.pdf"] * 2
         await up.close()
 
     env.promote()
