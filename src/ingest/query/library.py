@@ -247,8 +247,9 @@ class LibraryCache:
         if k <= 0 or rows.size == 0:
             return []
         with self._embed_lock:
-            vector = self._get_embedder(snap.version).embed(query)
-        scores = snap.matrix[rows] @ np.asarray(vector, dtype=np.float32)
+            vector = np.asarray(self._get_embedder(snap.version).embed(query), dtype=np.float32)
+        # Indexing the full matrix would copy it; score every row, then select.
+        scores = snap.matrix[rows] @ vector if doc_id is not None else (snap.matrix @ vector)[rows]
         order = np.argsort(-scores, kind="stable")
         hashes = snap.columns["text_hash"]
         seen: set[str] = set()
