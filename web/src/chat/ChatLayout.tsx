@@ -35,12 +35,13 @@ function Main() {
     document.title = chat?.title ?? "Chat";
   }, [chat?.title]);
 
-  // Close the PDF panel when switching chats.
+  // Close the PDF panel when switching chats (a new chat getting its id on the first send isn't a switch).
   const shownChatId = useRef(chatId);
   useEffect(() => {
-    if (shownChatId.current === chatId) return;
+    const previous = shownChatId.current;
+    if (previous === chatId) return;
     shownChatId.current = chatId;
-    close();
+    if (previous !== null) close();
   }, [chatId, close]);
 
   return (

@@ -1,4 +1,4 @@
-import "@/index.css";
+import "./chat.css";
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { StrictMode } from "react";

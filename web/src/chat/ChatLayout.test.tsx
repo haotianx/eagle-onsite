@@ -29,7 +29,12 @@ vi.mock("./messages/MessageList", () => ({
     );
   },
 }));
-vi.mock("./composer/Composer", () => ({ Composer: () => null }));
+vi.mock("./composer/Composer", () => ({
+  Composer: function Composer() {
+    const { open } = usePdfPanel();
+    return <button onClick={() => open({ docId: "d3" })}>Open upload</button>;
+  },
+}));
 vi.mock("@/components/pdf/PdfViewer", () => ({
   PdfViewer: ({ docId, page, highlights, onPageChange }: PdfViewerProps) => (
     <div data-testid="viewer" data-doc={docId} data-page={page} data-highlights={highlights?.length ?? 0}>
@@ -100,4 +105,15 @@ test("switching chats closes the PDF panel", async () => {
 
   act(() => navigateToChat("c2"));
   expect(screen.queryByTestId("viewer")).not.toBeInTheDocument();
+});
+
+test("a new chat getting its id keeps the PDF panel open", async () => {
+  mockApi();
+  renderChat(<ChatLayout />, { path: "/chat" });
+  await userEvent.click(await screen.findByRole("button", { name: "Open upload" }));
+  expect(screen.getByTestId("viewer")).toHaveAttribute("data-doc", "d3");
+
+  act(() => navigateToChat("c1"));
+  expect(await screen.findByRole("heading", { name: "Szekeres fees" })).toBeInTheDocument();
+  expect(screen.getByTestId("viewer")).toHaveAttribute("data-doc", "d3");
 });

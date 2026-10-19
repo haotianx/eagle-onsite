@@ -52,10 +52,8 @@ export function ChatPage({ chatId }: { chatId: string | null }) {
       {empty ? (
         <div className="flex-1" />
       ) : (
-        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-          <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col px-4">
-            <MessageList chat={chat} />
-          </div>
+        <div className="flex min-h-0 flex-1 flex-col">
+          <MessageList chat={chat} />
         </div>
       )}
       <div className="mx-auto w-full max-w-3xl shrink-0 px-4 pb-4">
