@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import importlib.machinery
+import sqlite3
 import sys
-import threading
 import types
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -14,17 +14,8 @@ import pytest
 from fastapi import APIRouter
 from fastapi.testclient import TestClient
 
-from ingest import gitinfo
 from ingest.api.app import create_app
 from ingest.config import Config
-
-
-@pytest.fixture(autouse=True)
-def no_watch(monkeypatch: pytest.MonkeyPatch) -> None:
-    def watch(repo_root: Path, paths: object, callback: object, stop: threading.Event, **_: object) -> None:
-        stop.wait()
-
-    monkeypatch.setattr(gitinfo, "watch", watch)
 
 
 def _config(root: Path) -> Config:
@@ -111,5 +102,5 @@ def test_lifespan_closes_catalog(tmp_path: Path) -> None:
     with TestClient(app):
         assert app.state.repo_events._thread is not None
     assert app.state.repo_events._thread is None
-    with pytest.raises(Exception):
+    with pytest.raises(sqlite3.ProgrammingError):
         app.state.catalog.list_runs()
