@@ -65,5 +65,4 @@
 - Finish the full run (embed in progress) and promote it; the chat library goes live then.
 - Two documents crashed the parser (native segfault); rerun them as a scratch run to reproduce.
 - Retrieval quality: "aerial mapping fee" finds the right proposal but not its fee chunk first — tune chunking or the embedding header.
-- Merge Phase 3 (`claude/phase-3-query-app-b67451`) into `main` when ready; the chat needs `ANTHROPIC_API_KEY` (or `ant auth login`) to answer.
 - A test process from the Phase 3 session is still holding port 8765; the UIs run on 8766 (engineer) and 8767 (chat).
