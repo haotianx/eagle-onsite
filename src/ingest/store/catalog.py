@@ -641,6 +641,13 @@ class Catalog:
                 raise ValueError(f"version {version_id} is {v.status}, not building")
             self._conn.execute("UPDATE versions SET status = 'abandoned' WHERE id = ?", (version_id,))
 
+    def set_checks_fp(self, version_id: int, checks_fp: str | None) -> None:
+        """Record the checks fingerprint a version's script issues were computed with."""
+        with self.transaction():
+            meta = dict(self.get_version(version_id).meta)
+            meta["checks_fp"] = checks_fp
+            self._conn.execute("UPDATE versions SET meta = ? WHERE id = ?", (_dumps(meta), version_id))
+
     def get_version(self, version_id: int) -> VersionRow:
         return _version(self._get("version", "SELECT * FROM versions WHERE id = ?", version_id))
 
@@ -772,6 +779,11 @@ class Catalog:
             self._conn.execute(
                 "INSERT OR IGNORE INTO removed_docs (doc_id, removed_at) VALUES (?, ?)", (doc_id, _now())
             )
+
+    def restore_removed_doc(self, doc_id: str) -> None:
+        """Undo add_removed_doc (the doc was uploaded again). No-op if not removed."""
+        with self.transaction():
+            self._conn.execute("DELETE FROM removed_docs WHERE doc_id = ?", (doc_id,))
 
     def removed_docs(self) -> set[str]:
         return {r["doc_id"] for r in self._all("SELECT doc_id FROM removed_docs")}

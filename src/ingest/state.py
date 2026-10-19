@@ -5,8 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal, TypeAlias
 
-from ingest import gitinfo
 from ingest.config import Config
+from ingest.engine.planner import dirty_nodes
 from ingest.fingerprint import dag_fingerprints, env_hash, node_fingerprint, sha256_file
 from ingest.spec import DagSpec
 from ingest.store.catalog import Catalog, RunRow, VersionRow
@@ -44,7 +44,7 @@ def node_states(catalog: Catalog, config: Config, dag: DagSpec) -> dict[str, Nod
     working = dag_fingerprints(dag, repo, env)
     current = catalog.current_versions(dag.name)
     latest = catalog.latest_snapshot(dag.source)
-    dirty_paths = gitinfo.dirty_paths(repo)
+    dirty = dirty_nodes(repo, dag)
     runs = catalog.list_runs(dag.name, limit=1000)
     script_hashes: dict[str, str] = {}
 
@@ -102,7 +102,7 @@ def node_states(catalog: Catalog, config: Config, dag: DagSpec) -> dict[str, Nod
             candidates=candidates,
             scratch=scratch,
             fingerprint=fp,
-            dirty=any(f in dirty_paths for f in dag.node_files(name)),
+            dirty=name in dirty,
             reasons=tuple(reasons),
         )
     return out

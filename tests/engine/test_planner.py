@@ -107,3 +107,19 @@ def test_committed_run_needs_a_commit(tmp_repo: Path) -> None:
         assert plan(e).code == "committed"
     finally:
         e.catalog.close()
+
+
+def test_dirty_nodes_are_per_node(env: Env) -> None:
+    from ingest.engine.planner import dirty_nodes
+
+    dag = lambda: load_dag(env.repo / "dags" / "toy.yaml", env.repo)  # noqa: E731
+    assert dirty_nodes(env.repo, dag()) == set()
+    write_dag(env.repo, TOY_DAG.replace("params: {n: 2}", "params: {n: 3}"))
+    assert dirty_nodes(env.repo, dag()) == {"rows"}
+    p = plan(env, selection="node", target="size")
+    assert p.code == "committed" and not p.dirty and not p.scratch
+    assert plan(env, selection="upstream", target="rows").scratch
+    (env.repo / "nodes" / "total.py").write_text((env.repo / "nodes" / "total.py").read_text() + "\n")
+    assert dirty_nodes(env.repo, dag()) == {"rows", "total"}
+    write_dag(env.repo, TOY_DAG.replace("source: proposals", "source: other"))
+    assert dirty_nodes(env.repo, dag()) == {"size", "rows", "total"}

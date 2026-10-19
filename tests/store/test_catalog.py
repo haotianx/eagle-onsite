@@ -575,6 +575,9 @@ def test_removed_docs(cat: Catalog) -> None:
     cat.add_removed_doc("u2")
     cat.add_removed_doc("u1")
     assert cat.removed_docs() == {"u1", "u2"}
+    cat.restore_removed_doc("u1")
+    cat.restore_removed_doc("u3")
+    assert cat.removed_docs() == {"u2"}
 
 
 # Issues

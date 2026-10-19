@@ -1,4 +1,4 @@
-"""Git state of the repo: HEAD, uncommitted paths, exporting HEAD files, watching."""
+"""Git state of the repo: HEAD, uncommitted paths, exporting files at HEAD or a commit, watching."""
 
 from __future__ import annotations
 
@@ -67,13 +67,26 @@ def materialize_head(repo_root: Path, paths: Iterable[str], dest: Path) -> list[
     """Write the HEAD version of each path (file or directory) under `dest`, keeping relative
     paths. Returns paths that don't exist in HEAD (skipped)."""
     paths = list(paths)
-    if head_commit(repo_root) is None:
+    commit = head_commit(repo_root)
+    if commit is None:
         return paths
+    return materialize_commit(repo_root, commit, paths, dest)
+
+
+def materialize_commit(repo_root: Path, commit: str, paths: Iterable[str], dest: Path) -> list[str]:
+    """Write each path (file or directory) as of `commit` under `dest`, keeping relative paths.
+    Returns paths that don't exist in that commit (skipped). Raises ValueError for an unknown
+    commit."""
+    paths = list(paths)
+    r = _git(repo_root, "rev-parse", "--verify", "--quiet", f"{commit}^{{commit}}")
+    if r.returncode != 0:
+        raise ValueError(f"commit {commit!r} not found in {repo_root}")
+    commit = r.stdout.decode().strip()
     missing: list[str] = []
     entries: dict[str, tuple[str, str]] = {}
     for p in paths:
         rel = _norm(p)
-        r = _git(repo_root, "ls-tree", "-r", "-z", "HEAD", "--", rel or ".")
+        r = _git(repo_root, "ls-tree", "-r", "-z", commit, "--", rel or ".")
         found = False
         for line in r.stdout.decode("utf-8", "surrogateescape").split("\0"):
             if not line:
