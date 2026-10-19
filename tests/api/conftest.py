@@ -153,10 +153,8 @@ def _version(
     return w_catalog.finalize_version(v.id, stats)
 
 
-def git(repo: Path, *args: str) -> str:
-    """Same contract as tests/conftest.py's `git`: both conftest modules import as `conftest`,
-    so whichever loads last serves `from conftest import git` elsewhere in the suite."""
-    return subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True).stdout
+def _git(repo: Path, *args: str) -> None:
+    subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
 
 
 @pytest.fixture(autouse=True)
@@ -174,8 +172,8 @@ def world(tmp_repo: Path) -> Iterator[World]:
     for rel, text in SCRIPTS.items():
         (tmp_repo / rel).parent.mkdir(parents=True, exist_ok=True)
         (tmp_repo / rel).write_text(text)
-    git(tmp_repo, "add", "-A")
-    git(tmp_repo, "commit", "-q", "-m", "init")
+    _git(tmp_repo, "add", "-A")
+    _git(tmp_repo, "commit", "-q", "-m", "init")
 
     config = load_config(tmp_repo)
     catalog = Catalog(config.catalog_path)
