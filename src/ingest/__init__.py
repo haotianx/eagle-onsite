@@ -8,4 +8,8 @@ def __getattr__(name: str):
         from ingest.publish import load_table
 
         return load_table
+    if name == "load_library":
+        from ingest.publish import load_library
+
+        return load_library
     raise AttributeError(name)

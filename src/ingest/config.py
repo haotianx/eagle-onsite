@@ -46,6 +46,11 @@ class Config:
     def published_dir(self) -> Path:
         return self.data_dir / "published"
 
+    @property
+    def uploads_dir(self) -> Path:
+        """Where the query app stores uploaded PDFs; a folder of the default source."""
+        return self.data_dir / "uploads"
+
     def run_dir(self, run_id: int) -> Path:
         return self.runs_dir / str(run_id)
 

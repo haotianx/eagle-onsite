@@ -88,6 +88,8 @@ class RunRow:
     ended_at: str | None
     error: str | None
     cancel_requested: bool
+    kind: str = "dag"
+    """"dag" or "single_doc" (single-doc runs: Ingestion-Design §8)."""
 
 
 @dataclass(frozen=True)
@@ -145,6 +147,24 @@ class VersionDocInput:
 @dataclass(frozen=True)
 class VersionDocRow(VersionDocInput):
     version_id: int = 0
+
+
+@dataclass(frozen=True)
+class PendingDocInput:
+    doc_id: str
+    version_id: int
+    """The embed version whose lineage processed this doc."""
+    run_id: int
+    paths: tuple[str, ...]
+    meta: Mapping[str, Any]
+    object_sha: str
+    """The doc's embed output (Parquet)."""
+    pages: int | None = None
+
+
+@dataclass(frozen=True)
+class PendingDocRow(PendingDocInput):
+    created_at: str = ""
 
 
 @dataclass(frozen=True)
@@ -687,6 +707,23 @@ class Catalog:
                 "SELECT * FROM version_issues WHERE version_id = ? AND doc_id = ? ORDER BY id", (version_id, doc_id)
             )
         return [_issue(r) for r in rows]
+
+    # Single-doc runs: pending and removed docs (Ingestion-Design §8, §12)
+    def add_pending_doc(self, doc: PendingDocInput) -> None:
+        """Record a doc processed by a single-doc run against an embed version (insert or replace
+        per (doc_id, version_id))."""
+        raise NotImplementedError
+
+    def pending_docs(self, version_id: int | None = None) -> list[PendingDocRow]:
+        """Pending docs recorded against `version_id` (all when None), oldest first."""
+        raise NotImplementedError
+
+    def add_removed_doc(self, doc_id: str) -> None:
+        """Hide a doc (a removed upload) from the library immediately."""
+        raise NotImplementedError
+
+    def removed_docs(self) -> set[str]:
+        raise NotImplementedError
 
     # Metrics
     def add_metrics(self, run_id: int, rows: Sequence[tuple[str | None, str | None, str, float]]) -> None:

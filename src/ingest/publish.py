@@ -7,6 +7,7 @@ import os
 import re
 import tempfile
 from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -112,6 +113,30 @@ def load_table(ref: str, *, repo_root: Path | None = None) -> pa.Table:
         return version_table(catalog, ObjectStore(config.objects_dir), v.id)
     finally:
         catalog.close()
+
+
+@dataclass(frozen=True)
+class Library:
+    rows: pa.Table
+    """The current version's rows plus rows of docs pending against it (single-doc runs), minus
+    removed docs; same columns and schema metadata as version_table."""
+    documents: pa.Table
+    """One row per library doc: doc_id, paths, job_number, project, subfolder, filename,
+    pages (int), upload (bool: from the uploads folder), pending (bool: not in the version yet)."""
+    version: dict[str, Any]
+    """version_metadata of the current version."""
+
+
+def library(catalog: Catalog, objects: ObjectStore, ref: str = "default/embed") -> Library:
+    """The library view (Ingestion-Design §12). Raises LookupError when `ref` has no current
+    version."""
+    raise NotImplementedError
+
+
+def load_library(ref: str = "default/embed", *, repo_root: Path | None = None) -> Library:
+    """Public API (`ingest.load_library`): open the repo's config and catalog and return
+    library(ref)."""
+    raise NotImplementedError
 
 
 def write_published(catalog: Catalog, objects: ObjectStore, version_id: int, published_dir: Path) -> Path:
