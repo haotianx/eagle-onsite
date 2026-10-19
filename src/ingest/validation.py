@@ -401,5 +401,7 @@ def revalidate(
                 continue
             record = objects.get(doc.object_sha, doc.kind)  # type: ignore[arg-type]
             issues += [(doc.doc_id, i) for i in script_checks(checks, record, params)]
-    catalog.replace_issues(version_id, "script", issues, checks_fp=checks_fp)
+    with catalog.transaction():
+        catalog.replace_issues(version_id, "script", issues, checks_fp=checks_fp)
+        catalog.set_checks_fp(version_id, checks_fp)
     return len(issues)

@@ -400,6 +400,9 @@ def test_revalidate(cat: Catalog, tmp_path: Path, checks: LoadedChecks) -> None:
     assert revalidate(cat, objects, version.id, checks, {"mode": "raise"}, "fp2") == 2
     assert {r.code for r in cat.issues(version.id) if r.source == "script"} == {"check_crashed"}
 
+    assert cat.get_version(version.id).meta["checks_fp"] == "fp2"
+
     assert revalidate(cat, objects, version.id, None, {}, None) == 0
     assert sorted(r.source for r in cat.issues(version.id)) == ["hard", "quality"]
     assert cat.version_docs(version.id) == docs_before
+    assert cat.get_version(version.id).meta["checks_fp"] is None
