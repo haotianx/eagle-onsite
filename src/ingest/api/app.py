@@ -1,5 +1,6 @@
 """FastAPI server for the engineer UI (Ingestion-Design §14–16). The query app (Query-Design), when
-installed as `ingest.query.api`, adds its routes and lifecycle through its `mount(app, config)`."""
+part of the checkout as `ingest.query.api`, adds its `router` (under /api) and its
+`lifespan(app, config)`."""
 
 from __future__ import annotations
 
@@ -24,7 +25,7 @@ GRACEFUL_SHUTDOWN_S = 3
 
 
 def api_router() -> APIRouter:
-    """Every JSON and SSE route of the engineer API, under API_PREFIX."""
+    """Every JSON and SSE route, under API_PREFIX: the engineer API plus the query app's."""
     from fastapi import APIRouter
 
     from ingest.api.routes import compare, dags, docs, events, runs, search, sources, versions
@@ -32,6 +33,8 @@ def api_router() -> APIRouter:
     router = APIRouter(prefix=API_PREFIX)
     for module in (dags, runs, versions, compare, search, sources, docs, events):
         router.include_router(module.router)
+    if (query := query_api()) is not None:
+        router.include_router(query.router)
     return router
 
 
@@ -58,11 +61,17 @@ def create_app(config: Config) -> FastAPI:
     objects = ObjectStore(config.objects_dir)
     repo_events = RepoEvents(config.repo_root)
 
+    query = query_api()
+
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         repo_events.start()
         try:
-            yield
+            if query is None:
+                yield
+            else:
+                async with query.lifespan(app, config):
+                    yield
         finally:
             repo_events.stop()
             catalog.close()
@@ -76,10 +85,6 @@ def create_app(config: Config) -> FastAPI:
     app.state.index_cache = IndexCache(catalog, objects)
     app.state.repo_events = repo_events
     app.include_router(api_router())
-
-    if (query := query_api()) is not None:
-        query.mount(app, config)
-
     _mount_web(app, config.repo_root / "web" / "dist")
     return app
 
