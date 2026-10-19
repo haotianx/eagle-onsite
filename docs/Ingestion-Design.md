@@ -75,8 +75,9 @@ nodes:
 - Per-doc outputs are cached by (node fingerprint, doc hash). Outputs are stored under their own content hash, and a cache index maps (node fingerprint, doc hash) → output, so a forced recompute never alters what older versions reference.
 - A version is a manifest of doc → output for one snapshot, so reused docs cost nothing. Lineage: node fingerprint, input versions, snapshot, git commit, dirty flag, script hash, params, lockfile and model revisions, timing.
 - Runs produce **candidate** versions; an engineer **promotes** one to make it current. Promotion is per node and does not promote upstream versions. Rollback = promote an older version.
-- Promotable only if built over the full snapshot from committed code. Subset or working-tree runs are **scratch**: inspectable and searchable, never promotable.
-- Node states: fresh · stale (code or params changed, or current version built from inputs that aren't current) · candidate available · running · failed · never run.
+- Promotable only if built over the full snapshot from committed code. Subset runs, runs of uncommitted code and runs that read a scratch input are **scratch**: inspectable and searchable, never promotable. A node counts as uncommitted only when its own YAML entry, script or checks file differs from HEAD, so editing one node's params leaves the others clean.
+- A rerun whose result would equal the latest version (same fingerprint, snapshot, inputs, checks and outputs) reuses that version instead of creating a new one.
+- Node states: fresh · stale (code or params changed, an input is stale, or the current version was built from inputs that aren't current) · candidate available · running · failed (also downstream of a node whose latest run failed) · never run.
 - Retention: keep everything; versions can be deleted manually.
 
 ## 8. Runs and incremental reprocessing
@@ -93,7 +94,7 @@ Examples: swap the chunker and run `chunk` alone over current OCR · run `chunk`
 
 One run per `<dag>/<node>` at a time (single-doc runs excepted); triggers arriving meanwhile merge into one follow-up run. Runs start manually from the UI or CLI; single-doc runs start from the query app.
 
-**Single-doc runs** process one document for the query app's uploads (Query-Design §12) through the node chain recorded in the current `embed` version's lineage — its scripts at the lineage's git commit, params and model revisions — so outputs land in the per-doc cache under the same fingerprints and a later full run reuses them. They create no version, take no per-node lock, run in one warm worker with models loaded, and appear in Runs with a Single-doc badge. Outputs are recorded in `pending_docs` against that version; when a new `embed` version is promoted, library docs not in it are reprocessed against it. If the environment changed since that version was built, outputs still serve the library but full runs don't reuse them.
+**Single-doc runs** process one document for the query app's uploads (Query-Design §12) through the node chain recorded in the current `embed` version's lineage — its scripts at the lineage's git commit, params and model revisions — so outputs land in the per-doc cache under the same fingerprints and a later full run reuses them. They create no version, take no per-node lock, run in one warm worker with models loaded, and appear in Runs with a Single-doc badge. Outputs are recorded in `pending_docs` against that version; when a new `embed` version is promoted, library docs not in it are reprocessed against it. If the environment changed since that version was built, outputs still serve the library but full runs don't reuse them. Submitting a removed doc (a re-upload) takes it out of `removed_docs`. Starting the runner fails single-doc runs a previous runner left queued or running.
 
 ## 9. Deduplication
 
@@ -107,7 +108,7 @@ One run per `<dag>/<node>` at a time (single-doc runs excepted); triggers arrivi
 - **Sync**: corrupt, encrypted or empty PDFs are flagged in the snapshot with a reason and kept, so `ocr` records a clear per-doc error.
 - **Hard checks** (built-in, always on): record shape and types for built-in artifacts; vectors have the model's dimension, no NaN, unit norm; one vector per chunk; coverage — every snapshot doc ends processed, failed, or skipped-upstream. A failure makes that doc an error; the version still publishes.
 - **Quality checks** (built-in, warnings): pages with no text, chunks over `max_tokens`, docs with zero chunks.
-- **Script-declared checks**: a node's `checks:` file defines `validate(record, params) -> issues`, each `{level: error | warning, code, message, page?}`. Errors make the doc an error; warnings show with the built-in ones. The checks file has its own fingerprint, so editing it never makes the node stale. **Revalidate** re-runs checks over an existing version and replaces its issues without changing records or version number. Issues are stored per (version, checks fingerprint).
+- **Script-declared checks**: a node's `checks:` file defines `validate(record, params) -> issues`, each `{level: error | warning, code, message, page?}`. Errors make the doc an error; warnings show with the built-in ones. The checks file has its own fingerprint, so editing it never makes the node stale. **Revalidate** re-runs checks over an existing version and replaces its issues without changing records or version number. Issues are stored per (version, checks fingerprint), and the version records the checks fingerprint it was last validated with.
 - Issues and warnings appear in the Version view and the Promote dialog; nothing blocks promotion.
 
 ## 11. Logging, debugging and telemetry
@@ -139,6 +140,7 @@ One run per `<dag>/<node>` at a time (single-doc runs excepted); triggers arrivi
 - **Access**: `ingest.load_table("default/embed")` (current, or `@vN`) returns an Arrow table; promoting a version writes `.ingest/published/<dag>/<node>.parquet`.
 - **Library view**: `ingest.load_library("default/embed")` returns the current version's rows plus `pending_docs` rows for source docs not in it, minus `removed_docs`, and a document table (doc id, paths, metadata, pages, upload flag). The query app searches it (Query-Design §11).
 - **Originals** are referenced in place (path + hash), not copied. If a file later changes or disappears, old versions show "original changed or missing" instead of the PDF.
+- **Renames**: cached outputs are keyed by content, so a renamed or moved file reuses its outputs; the filename and path inside `embed_text` stay as first processed until a forced rerun, while the metadata columns are always current.
 - The text column stays alongside vectors so lexical search can be added later.
 
 ## 13. Default DAG (local, Apple Silicon)
@@ -151,7 +153,7 @@ One run per `<dag>/<node>` at a time (single-doc runs excepted); triggers arrivi
 
 ## 14. Engineer experience (UI + CLI)
 
-Local web app; CLI with the same capabilities: `ingest sync | validate | run | cancel | status | show | diff | promote | revalidate | logs | doctor | models pull | ui`.
+Local web app; CLI with the same capabilities: `ingest sync | validate | run | cancel | status | show | diff | promote | revalidate | logs | doctor | models pull | ui`. A bare `dag/node` ref means the current version (show, diff and revalidate fall back to the newest version when none is current); for `promote` it means the newest candidate. Scripts that call the engine from Python need an `if __name__ == "__main__":` guard, because workers start with `spawn`.
 
 Navigation: DAGs · Runs · Search · Sources.
 
@@ -205,7 +207,7 @@ tests/
 web/
 ```
 
-**API**: `GET /dags`, `GET /dags/{dag}`, `GET /dags/{dag}/nodes/{node}/versions`, `POST /runs/plan`, `POST /runs`, `GET /runs`, `GET /runs/{id}`, `GET /runs/{id}/events`, `GET /versions/{id}`, `GET /versions/{id}/docs`, `GET /versions/{id}/docs/{doc}`, `GET /versions/{id}/issues`, `POST /versions/{id}/revalidate`, `POST /versions/{id}/promote`, `POST /runs/{id}/cancel`, `GET /runs/{id}/logs?node=&doc=&level=`, `GET /runs/{id}/metrics`, `GET /versions/{id}/docs/{doc}/debug`, `GET /compare?a=&b=`, `POST /search`, `GET /docs/{doc}/pdf`, `GET /sources`, `POST /sources/{name}/sync`, `GET /snapshots/{id}/diff`. Query app routes: Query-Design §13.
+**API** (JSON under `/api`, e.g. `GET /api/dags`; pages at `/` and `/chat`): `GET /dags`, `GET /dags/{dag}`, `GET /dags/{dag}/nodes/{node}/versions`, `POST /runs/plan`, `POST /runs`, `GET /runs`, `GET /runs/{id}`, `GET /runs/{id}/events`, `GET /versions/{id}`, `GET /versions/{id}/docs`, `GET /versions/{id}/docs/{doc}`, `GET /versions/{id}/issues`, `POST /versions/{id}/revalidate`, `POST /versions/{id}/promote`, `POST /runs/{id}/cancel`, `GET /runs/{id}/logs?node=&doc=&level=`, `GET /runs/{id}/metrics`, `GET /versions/{id}/docs/{doc}/debug`, `GET /compare?a=&b=`, `POST /search`, `GET /docs/{doc}/pdf`, `GET /sources`, `POST /sources/{name}/sync`, `GET /snapshots/{id}/diff`. Query app routes: Query-Design §13; the server includes `ingest.query.api.router` under `/api` and enters `ingest.query.api.lifespan(app, config)` inside its own lifespan.
 
 ## 17. Build plan
 
@@ -242,7 +244,7 @@ Implemented with the repo's `parallel-implement` skill: scaffolding and the shar
 
 ## 19. Smaller defaults
 
-Every PDF under the source's folders is included (optional glob filter); non-PDFs skipped · the default source has two folders, `/Users/Shared/proposals` and `.ingest/uploads/` (written by the query app); path metadata is parsed for the first, uploads get `filename` only · a changed file is a new doc; a deleted file drops out of new versions · signed and unsigned versions stay separate.
+Every PDF under the source's folders is included (optional glob filter); non-PDFs skipped · the default source has two folders, `/Users/Shared/proposals` and `.ingest/uploads/` (written by the query app); path metadata is parsed for the first, uploads get `filename` only; paths in folders after the first are prefixed with the folder's name (`uploads/<file>`), and a top-level folder of that name inside the first folder is an error · a changed file is a new doc; a deleted file drops out of new versions · signed and unsigned versions stay separate.
 
 ## 20. Deferred
 

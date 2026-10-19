@@ -128,7 +128,7 @@ Engineers own the library through the ingestion UI. The chat never shows DAGs, v
 2. A single-doc run (Ingestion §8) processes it through the current embed version's lineage; progress streams to the card.
 3. When the run finishes, the document is in the library.
 
-Chat routes, generation tasks and the single-doc worker run in the same FastAPI server as the engineer UI (Ingestion §14–15). The single-doc worker is a child process that loads the parse, chunk and embed models once; the server holds the query embedding model.
+Chat routes, generation tasks and the single-doc worker run in the same FastAPI server as the engineer UI (Ingestion §14–15): `ingest.query.api` exports a `router`, which the server includes under `/api`, and a `lifespan(app, config)` that it enters inside its own. The single-doc worker is a child process that loads the parse, chunk and embed models once; the server holds the query embedding model.
 
 ## 9. Agent
 
@@ -181,6 +181,8 @@ Chat routes, generation tasks and the single-doc worker run in the same FastAPI 
 - **Promotion**: when a new embed version becomes current, uploads not in it are reprocessed by single-doc runs (Ingestion §8).
 
 ## 13. API
+
+The chat JSON routes below are served under the server's `/api` prefix (e.g. `GET /api/chat/chats`); the page is at `/chat`.
 
 | Route | Purpose |
 | --- | --- |
