@@ -10,6 +10,7 @@ from collections import Counter
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from ingest.sources import META_KEYS, doc_meta_columns
 from ingest.store.catalog import Catalog, SnapshotDocRow, VersionRow
 from ingest.store.objects import ObjectStore
 
@@ -18,7 +19,6 @@ if TYPE_CHECKING:
 
 SCHEMA_META_KEY = b"ingest"
 
-_META_KEYS = ("job_number", "project", "subfolder", "filename")
 _REF = re.compile(r"(?P<dag>[^/@]+)/(?P<node>[^/@]+)(?:@v(?P<seq>[0-9]+))?")
 
 
@@ -82,7 +82,7 @@ def version_table(catalog: Catalog, objects: ObjectStore, version_id: int) -> pa
         if d is None:
             continue
         t = objects.get_table(d.object_sha).replace_schema_metadata(None)
-        clash = sorted(set(t.column_names) & {"paths", *_META_KEYS, "dup_count"})
+        clash = sorted(set(t.column_names) & {"paths", *META_KEYS, "dup_count"})
         if clash:
             raise ValueError(f"doc {row.doc_id} in {v.label} already has columns {clash}")
         if "text_hash" in t.column_names:
@@ -136,17 +136,14 @@ def write_published(catalog: Catalog, objects: ObjectStore, version_id: int, pub
 def _meta_schema() -> pa.Schema:
     import pyarrow as pa
 
-    return pa.schema([("paths", pa.list_(pa.string())), *((k, pa.string()) for k in _META_KEYS)])
+    return pa.schema([("paths", pa.list_(pa.string())), *((k, pa.string()) for k in META_KEYS)])
 
 
 def _with_meta(table: pa.Table, row: SnapshotDocRow) -> pa.Table:
     import pyarrow as pa
 
     n = table.num_rows
-    values: dict[str, Any] = {"paths": list(row.paths)}
-    for k in _META_KEYS:
-        value = row.meta.get(k)
-        values[k] = None if value is None else str(value)
+    values = {k: (v if k == "paths" or v is None else str(v)) for k, v in doc_meta_columns(row).items()}
     for f in _meta_schema():
         table = table.append_column(f, pa.array([values[f.name]] * n, f.type))
     return table
