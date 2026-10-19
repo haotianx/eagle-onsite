@@ -27,7 +27,7 @@ ingest = "ingest.cli:main"
 
 [dependency-groups]
 dev = [
-    "httpx",
+    "httpx2",
     "pytest",
     "pytest-timeout",
 ]

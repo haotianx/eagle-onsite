@@ -647,7 +647,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "httpx" },
+    { name = "httpx2" },
     { name = "pytest" },
     { name = "pytest-timeout" },
 ]
@@ -674,7 +674,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "httpx" },
+    { name = "httpx2" },
     { name = "pytest" },
     { name = "pytest-timeout" },
 ]
