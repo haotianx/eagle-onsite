@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import re
 import threading
-from collections import Counter
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
@@ -17,6 +16,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 from ingest import publish
 from ingest.config import Config
 from ingest.query import QueryConfig
+from ingest.search import VectorIndex
 from ingest.store.catalog import Catalog, VersionRow
 from ingest.store.objects import ObjectStore
 
@@ -40,7 +40,9 @@ revision, dim, query_instruction)."""
 
 _EMBEDDER_KEYS = ("model", "revision", "query_instruction")
 _REGION_COORDS = ("x0", "y0", "x1", "y1")
-_PASSAGE_COLUMNS = ("chunk_id", "doc_id", "seq", "text", "pages", "section", "regions", "filename", "job_number", "project")
+_PASSAGE_COLUMNS = (
+    "chunk_id", "doc_id", "seq", "text", "pages", "section", "regions", "filename", "job_number", "project"
+)
 _DIGITS = re.compile(r"[0-9]+")
 
 
@@ -68,7 +70,8 @@ class Passage:
     score: float | None = None
     """Cosine similarity for search results; None for read_document."""
     also_in: int = 0
-    """Number of other library docs with a chunk of the same text_hash (collapsed in search)."""
+    """Search only: number of other docs in scope whose chunks with the same text_hash were
+    collapsed into this one."""
 
     def to_dict(self) -> dict[str, Any]:
         """JSON-able, all fields (tuples as lists)."""
@@ -120,8 +123,8 @@ class DocumentInfo:
 class _Snapshot:
     version_id: int
     version: Mapping[str, Any]
-    matrix: np.ndarray
-    """float32 (rows, dim), C-contiguous."""
+    index: VectorIndex
+    """Every row's vector, text_hash (collapse key) and doc_id (group)."""
     row_doc: np.ndarray
     """int32 (rows,): index into doc_ids."""
     doc_ids: tuple[str, ...]
@@ -129,8 +132,6 @@ class _Snapshot:
     doc_rows: Mapping[str, np.ndarray]
     """doc_id → row indices ordered by seq."""
     chunk_rows: Mapping[str, int]
-    hash_docs: Mapping[str, int]
-    """text_hash → number of distinct docs having it."""
     documents: Mapping[str, DocumentInfo]
     columns: Mapping[str, list[Any]]
 
@@ -229,42 +230,29 @@ class LibraryCache:
         return snap.documents.get(doc_id)
 
     def search(self, query: str, *, doc_id: str | None = None, k: int = 8) -> list[Passage]:
-        """Top k passages by cosine over the rows of `doc_id` (all docs when None). Rows sharing
-        a text_hash collapse to the best-scoring one, whose also_in counts the other library
-        docs with that hash. Raises LookupError when not ready."""
+        """Top k passages by cosine over the rows of `doc_id` (all docs when None), via
+        ingest.search.VectorIndex. Rows sharing a text_hash collapse to the best-scoring one,
+        whose also_in counts the other docs in scope with that hash. Raises LookupError when not
+        ready."""
         import numpy as np
 
         snap, hidden = self._ready_state()
+        mask: np.ndarray | None = None
         if doc_id is not None:
             if doc_id in hidden or doc_id not in snap.doc_rows:
                 return []
-            rows = snap.doc_rows[doc_id]
+            mask = np.zeros(len(snap.index), dtype=bool)
+            mask[snap.doc_rows[doc_id]] = True
         else:
-            rows = np.arange(snap.matrix.shape[0])
             hidden_codes = [snap.doc_index[d] for d in hidden if d in snap.doc_index]
             if hidden_codes:
-                rows = rows[~np.isin(snap.row_doc, hidden_codes)]
-        if k <= 0 or rows.size == 0:
+                mask = ~np.isin(snap.row_doc, hidden_codes)
+        if k <= 0 or len(snap.index) == 0:
             return []
         with self._embed_lock:
             vector = np.asarray(self._get_embedder(snap.version).embed(query), dtype=np.float32)
-        # Indexing the full matrix would copy it; score every row, then select.
-        scores = snap.matrix[rows] @ vector if doc_id is not None else (snap.matrix @ vector)[rows]
-        order = np.argsort(-scores, kind="stable")
-        hashes = snap.columns["text_hash"]
-        seen: set[str] = set()
-        out: list[Passage] = []
-        for i in order:
-            row = int(rows[i])
-            h = hashes[row]
-            if h is not None:
-                if h in seen:
-                    continue
-                seen.add(h)
-            out.append(_passage(snap, row, float(scores[i])))
-            if len(out) == k:
-                break
-        return out
+        hits = snap.index.search(vector, k, mask=mask, collapse=True)
+        return [_passage(snap, hit.row, hit.score, also_in=hit.duplicates) for hit in hits]
 
     def read(self, doc_id: str) -> list[Passage]:
         """Every row of the doc ordered by seq ([] when the doc isn't in the library). Raises
@@ -366,7 +354,7 @@ def _build_snapshot(lib: publish.Library, version_id: int) -> _Snapshot:
         name: _column(rows, name, n)
         for name in (*_PASSAGE_COLUMNS, "text_hash")
     }
-    matrix = _matrix(rows, n, lib.version.get("dim"))
+    index = VectorIndex(_matrix(rows, n, lib.version.get("dim")), keys=columns["text_hash"], groups=columns["doc_id"])
 
     documents = {
         d["doc_id"]: DocumentInfo(
@@ -393,18 +381,15 @@ def _build_snapshot(lib: publish.Library, version_id: int) -> _Snapshot:
     groups = np.split(order, starts[1:]) if n else []
     doc_rows = {doc_ids[codes[start]]: group for start, group in zip(starts, groups, strict=True)}
 
-    pairs = set(zip(columns["text_hash"], columns["doc_id"], strict=True))
-    hash_docs = Counter(h for h, _ in pairs if h is not None)
     return _Snapshot(
         version_id=version_id,
         version=dict(lib.version),
-        matrix=matrix,
+        index=index,
         row_doc=row_doc,
         doc_ids=doc_ids,
         doc_index=doc_index,
         doc_rows=doc_rows,
         chunk_rows={c: i for i, c in enumerate(columns["chunk_id"])},
-        hash_docs=dict(hash_docs),
         documents=documents,
         columns=columns,
     )
@@ -425,9 +410,8 @@ def _matrix(table: pa.Table, n: int, dim: Any) -> np.ndarray:
     return np.ascontiguousarray(values.reshape(n, width), dtype=np.float32)
 
 
-def _passage(snap: _Snapshot, row: int, score: float | None) -> Passage:
+def _passage(snap: _Snapshot, row: int, score: float | None, *, also_in: int = 0) -> Passage:
     c = snap.columns
-    h = c["text_hash"][row]
     return Passage(
         chunk_id=c["chunk_id"][row],
         doc_id=c["doc_id"][row],
@@ -440,7 +424,7 @@ def _passage(snap: _Snapshot, row: int, score: float | None) -> Passage:
         job_number=c["job_number"][row],
         project=c["project"][row],
         score=score,
-        also_in=0 if h is None else max(snap.hash_docs.get(h, 1) - 1, 0),
+        also_in=also_in,
     )
 
 

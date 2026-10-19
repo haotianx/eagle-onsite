@@ -212,7 +212,7 @@ def test_search_orders_by_score_and_collapses_duplicates(loaded: LibraryCache) -
 def test_search_scoped_to_one_document(loaded: LibraryCache) -> None:
     results = loaded.search("y", doc_id="b", k=10)
     assert ids(results) == ["b-0", "b-1"]
-    assert results[1].also_in == 2
+    assert results[1].also_in == 0  # no other document in scope
     assert ids(loaded.search("z", doc_id="a", k=1)) == ["a-2"]
     assert loaded.search("x", doc_id="missing") == []
     assert loaded.search("x", doc_id="e") == []
@@ -222,7 +222,7 @@ def test_read_orders_by_seq(loaded: LibraryCache) -> None:
     passages = loaded.read("a")
     assert ids(passages) == ["a-0", "a-1", "a-2"]
     assert [p.score for p in passages] == [None] * 3
-    assert [p.also_in for p in passages] == [0, 0, 2]
+    assert [p.also_in for p in passages] == [0, 0, 0]
     assert loaded.read("e") == []
     assert loaded.read("missing") == []
 
@@ -236,7 +236,7 @@ def test_passage_and_to_dict(loaded: LibraryCache) -> None:
     d = p.to_dict()
     assert d["regions"] == [{"page": 3, "x0": 10.0, "y0": 20.0, "x1": 300.0, "y1": 40.0}]
     assert isinstance(d["regions"][0]["page"], int) and isinstance(d["regions"][0]["x0"], float)
-    assert d["pages"] == [3] and d["section"] == ["S"] and d["also_in"] == 2 and d["score"] is None
+    assert d["pages"] == [3] and d["section"] == ["S"] and d["also_in"] == 0 and d["score"] is None
     assert json.loads(json.dumps(d)) == d
     assert loaded.passage("nope") is None
 
