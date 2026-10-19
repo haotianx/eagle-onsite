@@ -13,11 +13,14 @@ nodes:
     params:
       max_tokens: 512
       tokenizer: Qwen/Qwen3-Embedding-0.6B
+      tokenizer_revision: 97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3
     workers: 4
   embed:
     script: nodes/embed.py
     inputs: [chunk]
     params:
       model: Qwen/Qwen3-Embedding-0.6B
+      revision: 97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3
+      dim: 1024
       batch_size: 32
     workers: 1
