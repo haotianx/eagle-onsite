@@ -201,15 +201,16 @@ def services_patched(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     yield
 
 
-def make_app(config: Config) -> FastAPI:
+def make_app(config: Config, **hooks: Any) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         calls.append("app.start")
-        yield
+        async with api.lifespan(app, config, **hooks):
+            yield
         calls.append("app.stop")
 
     app = FastAPI(lifespan=lifespan)
-    api.mount(app, config)
+    app.include_router(api.router, prefix="/api")
     return app
 
 
@@ -231,25 +232,22 @@ def sse(text: str) -> list[dict[str, str]]:
     return events
 
 
-def test_mount_wraps_app_lifespan(config: Config, services_patched: None) -> None:
-    with TestClient(make_app(config)) as c:
+def test_lifespan_starts_and_stops_services(config: Config, services_patched: None) -> None:
+    app = make_app(config)
+    with TestClient(app) as c:
         assert calls == ["app.start", "library.init", "uploads.start"]
         s = services(c)
         assert isinstance(s.store, ChatStore)
         assert s.library.ready
         assert chat_db_path(config).exists()
     assert calls[-4:] == ["generations.close", "uploads.close", "library.close", "app.stop"]
+    assert not hasattr(app.state, "query")
 
 
-def test_mount_passes_factories(config: Config, services_patched: None) -> None:
-    app = FastAPI()
+def test_lifespan_passes_factories(config: Config, services_patched: None) -> None:
     client_factory, runner_factory, embedder_factory = object(), object(), object()
-    api.mount(
-        app,
-        config,
-        client_factory=client_factory,  # type: ignore[arg-type]
-        runner_factory=runner_factory,  # type: ignore[arg-type]
-        embedder_factory=embedder_factory,  # type: ignore[arg-type]
+    app = make_app(
+        config, client_factory=client_factory, runner_factory=runner_factory, embedder_factory=embedder_factory
     )
     with TestClient(app) as c:
         s = services(c)
@@ -264,57 +262,57 @@ def test_startup_marks_interrupted_answers(config: Config, services_patched: Non
     store.add_message(chat.id, role="assistant", text="partial", content=[], state="generating", scope=None)
     store.close()
     with TestClient(make_app(config)) as c:
-        messages = c.get(f"/chat/chats/{chat.id}").json()["messages"]
+        messages = c.get(f"/api/chat/chats/{chat.id}").json()["messages"]
     assert messages[0]["state"] == "stopped"
 
 
 def test_library_not_ready(config: Config, services_patched: None, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(FakeLibrary, "load", lambda self: (_ for _ in ()).throw(LookupError("none")))
     with TestClient(make_app(config)) as c:
-        assert c.get("/chat/chats").json() == {"library_ready": False, "chats": []}
-        chat = c.post("/chat/chats").json()
-        r = c.post(f"/chat/chats/{chat['id']}/messages", json={"text": "Fees?"})
+        assert c.get("/api/chat/chats").json() == {"library_ready": False, "chats": []}
+        chat = c.post("/api/chat/chats").json()
+        r = c.post(f"/api/chat/chats/{chat['id']}/messages", json={"text": "Fees?"})
         assert r.status_code == 409
         assert r.json()["detail"] == "Library isn't ready"
 
 
 def test_chat_crud(client: TestClient) -> None:
-    a = client.post("/chat/chats").json()
-    b = client.post("/chat/chats").json()
+    a = client.post("/api/chat/chats").json()
+    b = client.post("/api/chat/chats").json()
     assert set(a) == {"id", "title", "updated_at", "generating"}
     assert a["title"] is None and not a["generating"]
 
-    r = client.patch(f"/chat/chats/{a['id']}", json={"title": "  Szekeres fees "})
+    r = client.patch(f"/api/chat/chats/{a['id']}", json={"title": "  Szekeres fees "})
     assert r.json()["title"] == "Szekeres fees"
-    assert client.patch(f"/chat/chats/{a['id']}", json={"title": " "}).status_code == 422
+    assert client.patch(f"/api/chat/chats/{a['id']}", json={"title": " "}).status_code == 422
 
-    listing = client.get("/chat/chats").json()
+    listing = client.get("/api/chat/chats").json()
     assert listing["library_ready"] is True
     assert [c["id"] for c in listing["chats"]] == [a["id"], b["id"]]
 
-    detail = client.get(f"/chat/chats/{b['id']}").json()
+    detail = client.get(f"/api/chat/chats/{b['id']}").json()
     assert detail == {"id": b["id"], "title": None, "scope": None, "generating": False, "messages": []}
 
-    assert client.delete(f"/chat/chats/{b['id']}").status_code == 204
-    assert client.get(f"/chat/chats/{b['id']}").status_code == 404
-    assert client.delete(f"/chat/chats/{b['id']}").status_code == 404
-    assert client.patch("/chat/chats/nope", json={"title": "x"}).status_code == 404
+    assert client.delete(f"/api/chat/chats/{b['id']}").status_code == 204
+    assert client.get(f"/api/chat/chats/{b['id']}").status_code == 404
+    assert client.delete(f"/api/chat/chats/{b['id']}").status_code == 404
+    assert client.patch("/api/chat/chats/nope", json={"title": "x"}).status_code == 404
 
 
 def test_ask_streams_events_and_replays(client: TestClient) -> None:
-    chat = client.post("/chat/chats").json()
-    r = client.post(f"/chat/chats/{chat['id']}/messages", json={"text": "Fees?", "scope": None, "upload_ids": []})
+    chat = client.post("/api/chat/chats").json()
+    r = client.post(f"/api/chat/chats/{chat['id']}/messages", json={"text": "Fees?", "scope": None, "upload_ids": []})
     assert r.status_code == 202
     body = r.json()
     assert body["question"]["role"] == "user" and body["question"]["text"] == "Fees?"
     assert body["answer"]["role"] == "assistant" and body["answer"]["state"] == "generating"
-    assert client.get("/chat/chats").json()["chats"][0]["generating"] is True
+    assert client.get("/api/chat/chats").json()["chats"][0]["generating"] is True
 
-    busy = client.post(f"/chat/chats/{chat['id']}/messages", json={"text": "Again"})
+    busy = client.post(f"/api/chat/chats/{chat['id']}/messages", json={"text": "Again"})
     assert busy.status_code == 409 and busy.json()["detail"] == "An answer is already generating"
 
     for _ in range(2):
-        r = client.get(f"/chat/chats/{chat['id']}/events")
+        r = client.get(f"/api/chat/chats/{chat['id']}/events")
         assert r.status_code == 200
         assert r.headers["content-type"].startswith("text/event-stream")
         events = sse(r.text)
@@ -324,54 +322,54 @@ def test_ask_streams_events_and_replays(client: TestClient) -> None:
         assert '"message_id": "' + body["answer"]["id"] in events[3]["data"]
 
     services(client).generations.finish(chat["id"])
-    r = client.get(f"/chat/chats/{chat['id']}/events")
+    r = client.get(f"/api/chat/chats/{chat['id']}/events")
     assert r.status_code == 204 and r.content == b""
-    assert client.get("/chat/chats/nope/events").status_code == 404
+    assert client.get("/api/chat/chats/nope/events").status_code == 404
 
 
 def test_ask_errors(client: TestClient) -> None:
-    chat = client.post("/chat/chats").json()
-    r = client.post(f"/chat/chats/{chat['id']}/messages", json={"text": "Fees?", "scope": "missing"})
+    chat = client.post("/api/chat/chats").json()
+    r = client.post(f"/api/chat/chats/{chat['id']}/messages", json={"text": "Fees?", "scope": "missing"})
     assert r.status_code == 409 and r.json()["detail"] == "Not in the library"
-    assert client.post("/chat/chats/nope/messages", json={"text": "Fees?"}).status_code == 404
-    assert client.post(f"/chat/chats/{chat['id']}/messages", json={"text": ""}).status_code == 422
+    assert client.post("/api/chat/chats/nope/messages", json={"text": "Fees?"}).status_code == 404
+    assert client.post(f"/api/chat/chats/{chat['id']}/messages", json={"text": ""}).status_code == 422
 
 
 def test_retry_and_stop(client: TestClient) -> None:
-    chat = client.post("/chat/chats").json()
+    chat = client.post("/api/chat/chats").json()
     gens = services(client).generations
-    r = client.post(f"/chat/chats/{chat['id']}/retry")
+    r = client.post(f"/api/chat/chats/{chat['id']}/retry")
     assert r.status_code == 409 and r.json()["detail"] == "No answer to retry"
 
-    first = client.post(f"/chat/chats/{chat['id']}/messages", json={"text": "Fees?"}).json()
-    assert client.post(f"/chat/chats/{chat['id']}/retry").status_code == 409
+    first = client.post(f"/api/chat/chats/{chat['id']}/messages", json={"text": "Fees?"}).json()
+    assert client.post(f"/api/chat/chats/{chat['id']}/retry").status_code == 409
 
-    assert client.post(f"/chat/chats/{chat['id']}/stop").status_code == 204
+    assert client.post(f"/api/chat/chats/{chat['id']}/stop").status_code == 204
     assert gens.stopped == [chat["id"]]
-    assert client.post("/chat/chats/nope/stop").status_code == 404
+    assert client.post("/api/chat/chats/nope/stop").status_code == 404
 
-    r = client.post(f"/chat/chats/{chat['id']}/retry")
+    r = client.post(f"/api/chat/chats/{chat['id']}/retry")
     assert r.status_code == 202
     answer = r.json()["answer"]
     assert answer["id"] != first["answer"]["id"] and answer["state"] == "generating"
-    ids = [m["id"] for m in client.get(f"/chat/chats/{chat['id']}").json()["messages"]]
+    ids = [m["id"] for m in client.get(f"/api/chat/chats/{chat['id']}").json()["messages"]]
     assert ids == [first["question"]["id"], answer["id"]]
 
 
 def test_delete_stops_generation(client: TestClient) -> None:
-    chat = client.post("/chat/chats").json()
-    client.post(f"/chat/chats/{chat['id']}/messages", json={"text": "Fees?"})
-    assert client.delete(f"/chat/chats/{chat['id']}").status_code == 204
+    chat = client.post("/api/chat/chats").json()
+    client.post(f"/api/chat/chats/{chat['id']}/messages", json={"text": "Fees?"})
+    assert client.delete(f"/api/chat/chats/{chat['id']}").status_code == 204
     gens = services(client).generations
     assert gens.cancelled == [chat["id"]]
-    assert client.get("/chat/chats").json()["chats"] == []
+    assert client.get("/api/chat/chats").json()["chats"] == []
 
 
 def test_upload_routes(client: TestClient) -> None:
     s = services(client)
     s.library.docs["d-up"] = doc_info("d-up", "Addendum.pdf", upload=True)
 
-    r = client.post("/chat/uploads", files={"file": ("Addendum.pdf", PDF + b"x" * 100, "application/pdf")})
+    r = client.post("/api/chat/uploads", files={"file": ("Addendum.pdf", PDF + b"x" * 100, "application/pdf")})
     assert r.status_code == 200
     card = r.json()
     assert card == {
@@ -385,41 +383,31 @@ def test_upload_routes(client: TestClient) -> None:
         {"id": card["id"], "doc_id": "d-up", "status": "ready", "stage": None, "pages": 2, "error": None},
     ]
     s.uploads.snapshots[card["id"]] = snapshots
-    r = client.get(f"/chat/uploads/{card['id']}/events")
+    r = client.get(f"/api/chat/uploads/{card['id']}/events")
     assert r.status_code == 200
     events = sse(r.text)
     assert [e["event"] for e in events] == ["status", "status"]
     assert '"stage": "reading"' in events[0]["data"] and '"status": "ready"' in events[1]["data"]
-    assert client.get("/chat/uploads/nope/events").status_code == 404
+    assert client.get("/api/chat/uploads/nope/events").status_code == 404
 
-    r = client.delete(f"/chat/uploads/{card['id']}")
+    r = client.delete(f"/api/chat/uploads/{card['id']}")
     assert r.status_code == 200 and r.json()["removed"] is True
-    assert client.delete("/chat/uploads/nope").status_code == 404
+    assert client.delete("/api/chat/uploads/nope").status_code == 404
 
     proposal = s.store.add_upload(doc_id="d1", filename="a.pdf", status="ready", removable=False)
-    r = client.delete(f"/chat/uploads/{proposal.id}")
+    r = client.delete(f"/api/chat/uploads/{proposal.id}")
     assert r.status_code == 409 and r.json()["detail"] == "Only uploads can be removed"
 
 
 def test_upload_failures(client: TestClient) -> None:
-    r = client.post("/chat/uploads", files={"file": ("notes.txt", b"hello", "text/plain")})
+    r = client.post("/api/chat/uploads", files={"file": ("notes.txt", b"hello", "text/plain")})
     assert r.status_code == 200
     assert r.json()["status"] == "failed" and r.json()["error"] == "Not a PDF"
 
-    r = client.post("/chat/uploads", files={"file": ("big.pdf", PDF + b"x" * MAX_BYTES, "application/pdf")})
+    r = client.post("/api/chat/uploads", files={"file": ("big.pdf", PDF + b"x" * MAX_BYTES, "application/pdf")})
     assert r.status_code == 200
     assert r.json()["status"] == "failed" and r.json()["error"] == "Over 50 MB"
     assert services(client).uploads.received[-1] == ("big.pdf", MAX_BYTES + 1)
-
-
-def test_chat_page(config: Config, client: TestClient) -> None:
-    assert client.get("/chat").status_code == 404
-    page = config.repo_root / "web" / "dist" / "chat.html"
-    page.parent.mkdir(parents=True)
-    page.write_text("<!doctype html><title>Chat</title>")
-    r = client.get("/chat")
-    assert r.status_code == 200 and "<title>Chat</title>" in r.text
-    assert "/chat" not in client.get("/openapi.json").json()["paths"]
 
 
 def test_chat_detail_shape(client: TestClient) -> None:
@@ -463,7 +451,7 @@ def test_chat_detail_shape(client: TestClient) -> None:
         ),
     ])
 
-    detail = client.get(f"/chat/chats/{chat.id}").json()
+    detail = client.get(f"/api/chat/chats/{chat.id}").json()
     assert detail["scope"] == {"doc_id": "d1", "filename": "2292 Szekeres Proposal.pdf"}
     question, answer = detail["messages"]
     assert question == {
@@ -491,4 +479,4 @@ def test_chat_detail_shape(client: TestClient) -> None:
     ]
 
     store.update_chat(chat.id, scope="d-gone")
-    assert client.get(f"/chat/chats/{chat.id}").json()["scope"] == {"doc_id": "d-gone", "filename": "Addendum.pdf"}
+    assert client.get(f"/api/chat/chats/{chat.id}").json()["scope"] == {"doc_id": "d-gone", "filename": "Addendum.pdf"}

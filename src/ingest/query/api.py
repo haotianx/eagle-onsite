@@ -1,4 +1,9 @@
-"""/chat routes + SSE (Query-Design §13) and the query app's startup and shutdown."""
+"""/chat routes + SSE (Query-Design §13) and the query app's startup and shutdown.
+
+    router      APIRouter(prefix="/chat") with every chat JSON and SSE route; the server includes
+                it under "/api". Routes reach the services through request.app.state.query.
+    lifespan    starts the query services on app.state and stops them; the server enters it
+                inside its own lifespan."""
 
 from __future__ import annotations
 
@@ -11,7 +16,6 @@ from dataclasses import dataclass
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Response, UploadFile
-from fastapi.responses import FileResponse
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 from pydantic import BaseModel, Field, StringConstraints
 
@@ -198,36 +202,27 @@ class RetryResponse(BaseModel):
 # Startup and shutdown
 
 
-def mount(
+@asynccontextmanager
+async def lifespan(
     app: FastAPI,
     config: Config,
     *,
     client_factory: Callable[[], Any] | None = None,
     runner_factory: Callable[..., Any] | None = None,
     embedder_factory: Callable[..., Any] | None = None,
-) -> None:
-    """Add the /chat/* routes and GET /chat (the built web/dist/chat.html), and wrap
-    app.router.lifespan_context so the query services (chat store, library cache, uploads and
-    the single-doc worker, generation tasks) start after and stop before the app's own
-    lifespan. Call before the app starts serving and before any catch-all route.
+) -> AsyncIterator[None]:
+    """Start the query services (chat store, library cache, uploads and the single-doc worker,
+    generation tasks) as app.state.query for `router`, and stop them in reverse order on exit.
+    Entered inside the app's own lifespan.
 
     The keyword arguments replace the Anthropic client, single-doc runner and query embedder
     factories (tests)."""
-    original = app.router.lifespan_context
-
-    @asynccontextmanager
-    async def lifespan(app_: FastAPI) -> AsyncIterator[Any]:
-        async with original(app_) as state:
-            async with _services(config, client_factory, runner_factory, embedder_factory) as services:
-                app_.state.query = services
-                try:
-                    yield state
-                finally:
-                    del app_.state.query
-
-    app.router.lifespan_context = lifespan
-    app.include_router(router)
-    app.add_api_route("/chat", _chat_page(config), methods=["GET"], include_in_schema=False)
+    async with _services(config, client_factory, runner_factory, embedder_factory) as services:
+        app.state.query = services
+        try:
+            yield
+        finally:
+            del app.state.query
 
 
 @asynccontextmanager
@@ -271,16 +266,6 @@ def _warm(library: LibraryCache) -> None:
         library.warm()
     except Exception:
         log.exception("loading the query embedding model failed")
-
-
-def _chat_page(config: Config) -> Callable[[], Any]:
-    def chat_page() -> FileResponse:
-        path = config.repo_root / "web" / "dist" / "chat.html"
-        if not path.is_file():
-            raise HTTPException(404, "The chat app isn't built")
-        return FileResponse(path)
-
-    return chat_page
 
 
 # Routes
