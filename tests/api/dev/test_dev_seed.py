@@ -1,23 +1,18 @@
-"""Dev seeding (synthetic) and the Phase 1 fakes used by the dev server."""
+"""Dev seeding (synthetic and, opt-in, the real nodes on one fixture)."""
 
 from __future__ import annotations
 
 import json
-import time
 from pathlib import Path
 from types import MappingProxyType
 
 import pytest
 
-import fakes
 import seed
 from ingest import obs, sources, validation
 from ingest.config import Config, SourceConfig
 from ingest.contract import NodeContext
-from ingest.engine import executor, planner
-from ingest.engine.planner import RunRequest
-from ingest.spec import DagSpec, NodeSpec, load_dags
-from ingest.state import NodeState
+from ingest.spec import DagSpec, load_dags
 from ingest.store.catalog import Catalog
 
 REPO = Path(__file__).resolve().parents[3]
@@ -42,16 +37,6 @@ def catalog(config: Config, seeded: dict):
     c = Catalog(config.catalog_path)
     yield c
     c.close()
-
-
-@pytest.fixture
-def installed(config: Config, monkeypatch: pytest.MonkeyPatch) -> list[str]:
-    from ingest import state
-
-    for module, name in ((state, "node_states"), (state, "promotable"), (state, "promote"),
-                         (planner, "selected_nodes"), (planner, "plan_run"), (executor, "submit"), (executor, "cancel")):
-        monkeypatch.setattr(module, name, getattr(module, name))
-    return fakes.install(config)
 
 
 def dag(config: Config) -> DagSpec:
@@ -125,124 +110,6 @@ def test_seed_runs(config: Config, catalog: Catalog, seeded: dict) -> None:
     assert {line["kind"] for line in lines} >= {"event", "log", "stderr"}
     assert all("node" in line and "doc_id" in line for line in lines if line["kind"] != "event")
     assert json.loads(json.dumps(lines))
-
-
-def test_is_stub() -> None:
-    def stub(x: int) -> int:
-        """Doc."""
-        raise NotImplementedError
-
-    def real(x: int) -> int:
-        if x:
-            raise NotImplementedError
-        return x
-
-    assert fakes.is_stub(stub) and not fakes.is_stub(real)
-
-
-def test_install_replaces_only_stubs(config: Config, monkeypatch: pytest.MonkeyPatch) -> None:
-    from ingest import state
-
-    monkeypatch.setattr(state, "promote", lambda *a: [])
-    monkeypatch.setattr(state, "node_states", state.node_states)
-    for module, name in ((state, "promotable"), (planner, "selected_nodes"), (planner, "plan_run"),
-                         (executor, "submit"), (executor, "cancel")):
-        monkeypatch.setattr(module, name, getattr(module, name))
-    stubbed = fakes.is_stub(state.node_states)
-    installed = fakes.install(config)
-    assert "ingest.state.promote" not in installed and state.promote is not fakes.promote
-    assert ("ingest.state.node_states" in installed) == stubbed
-    if stubbed:
-        assert state.node_states is fakes.node_states
-
-
-def test_node_states(config: Config, catalog: Catalog, seeded: dict) -> None:
-    states = fakes.node_states(catalog, config, dag(config))
-    assert {n: s.state for n, s in states.items()} == {"ocr": "fresh", "chunk": "candidate", "embed": "candidate"}
-    assert [v.id for v in states["chunk"].candidates] == [seeded["versions"]["chunk@v2"]]
-    assert [v.id for v in states["ocr"].scratch] == [seeded["versions"]["ocr@v2"]]
-    assert states["ocr"].fingerprint == states["ocr"].current.node_fp
-
-    fakes.promote(catalog, config, seeded["versions"]["chunk@v2"])
-    states = fakes.node_states(catalog, config, dag(config))
-    assert states["chunk"].state == "stale" and "code or params changed" in states["chunk"].reasons
-    assert states["embed"].state == "stale" and "input chunk is not current" in states["embed"].reasons
-
-    run_id = catalog.create_run("default", {"nodes": ["embed"]}, scratch=False, commit=None, dirty=False)
-    catalog.set_run_status(run_id, "failed", "boom")
-    assert fakes.node_states(catalog, config, dag(config))["embed"].state == "failed"
-    run_id = catalog.create_run("default", {"nodes": ["embed"]}, scratch=False, commit=None, dirty=False)
-    catalog.set_run_status(run_id, "running")
-    assert fakes.node_states(catalog, config, dag(config))["embed"].state == "running"
-
-    d = dag(config)
-    extra = DagSpec(d.name, d.source, {**d.nodes, "summary": NodeSpec("summary", "nodes/embed.py", {}, ("chunk",))}, d.path)
-    assert fakes.node_states(catalog, config, extra)["summary"].state == "never_run"
-    assert isinstance(states["ocr"], NodeState)
-
-
-def test_promote(config: Config, catalog: Catalog, seeded: dict) -> None:
-    v = seeded["versions"]
-    assert fakes.promotable(catalog, v["ocr@v2"]) == (False, ["scratch version"])
-    assert fakes.promotable(catalog, v["embed@v1"]) == (False, ["already current"])
-    assert fakes.promotable(catalog, v["embed@v2"]) == (True, [])
-
-    published = config.published_dir / "default" / "embed.parquet"
-    before = published.stat().st_mtime_ns
-    warnings = fakes.promote(catalog, config, v["embed@v2"])
-    assert "input chunk is not current" in warnings
-    assert catalog.current_version("default", "embed").id == v["embed@v2"]
-    assert published.stat().st_mtime_ns != before
-    with pytest.raises(ValueError):
-        fakes.promote(catalog, config, v["ocr@v2"])
-
-
-def test_plan_run(config: Config, catalog: Catalog, seeded: dict, installed: list[str]) -> None:
-    plan = planner.plan_run(catalog, config, RunRequest(dag="default"))
-    assert [(p.node, p.docs_cached, p.docs_to_process) for p in plan.nodes] == [("ocr", 6, 0), ("chunk", 6, 0), ("embed", 6, 0)]
-    assert plan.snapshot_id == seeded["snapshots"][1] and len(plan.doc_ids) == 6
-
-    plan = planner.plan_run(catalog, config, RunRequest(dag="default", target="chunk", selection="downstream", recompute="force"))
-    assert [(p.node, p.docs_cached, p.docs_to_process) for p in plan.nodes] == [("chunk", 0, 6), ("embed", 0, 6)]
-    assert plan.nodes[0].inputs["ocr"].version_id == seeded["versions"]["ocr@v1"]
-
-    plan = planner.plan_run(catalog, config, RunRequest(dag="default", target="embed", selection="node",
-                                                        input_versions={"chunk": seeded["versions"]["chunk@v2"]}))
-    assert plan.nodes[0].fingerprint == catalog.get_version(seeded["versions"]["embed@v2"]).node_fp
-    assert plan.nodes[0].docs_cached == 6
-
-    plan = planner.plan_run(catalog, config, RunRequest(dag="default", docs=2))
-    assert plan.scratch and "doc subset" in plan.scratch_reasons and len(plan.doc_ids) == 2
-    with pytest.raises(planner.PlanError):
-        planner.plan_run(catalog, config, RunRequest(dag="nope"))
-    assert fakes.selected_nodes(dag(config), "upstream", "embed") == ["ocr", "chunk", "embed"]
-
-
-def wait_terminal(catalog: Catalog, run_id: int, timeout: float = 10.0) -> str:
-    end = time.monotonic() + timeout
-    while time.monotonic() < end:
-        status = catalog.get_run(run_id).status
-        if status in ("succeeded", "failed", "cancelled"):
-            return status
-        time.sleep(0.05)
-    raise TimeoutError
-
-
-def test_submit_and_cancel(config: Config, catalog: Catalog, seeded: dict, installed: list[str],
-                           monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(fakes, "RUN_SECONDS", 0.3)
-    run_id = executor.submit(config, RunRequest(dag="default", target="chunk", selection="downstream", recompute="force"))
-    assert catalog.get_run(run_id).request["nodes"] == ["chunk", "embed"]
-    assert wait_terminal(catalog, run_id) == "succeeded", catalog.get_run(run_id).error
-    kinds = [e.kind for e in catalog.events(run_id)]
-    assert kinds[:2] == ["run_queued", "run_started"] and kinds[-1] == "run_finished"
-    assert kinds.count("doc_finished") == 12 and kinds.count("node_finished") == 2
-
-    monkeypatch.setattr(fakes, "RUN_SECONDS", 5.0)
-    run_id = executor.submit(config, RunRequest(dag="default", recompute="force"))
-    time.sleep(0.8)
-    executor.cancel(catalog, run_id)
-    assert wait_terminal(catalog, run_id) == "cancelled"
 
 
 @pytest.mark.models

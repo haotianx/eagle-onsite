@@ -1,10 +1,11 @@
-"""Dev server: seed a data dir when empty, install the Phase 1 fakes, serve the app.
+"""Dev server: seed a data dir when empty, then serve the app on it.
 
     uv run python tests/api/dev/server.py [--data-dir .ingest/dev] [--seed real|synthetic|none]
                                           [--port 8765] [--host 127.0.0.1]
 
 The config is built here (ingest.toml is not read): repo_root is this worktree and the
-`proposals` source is tests/fixtures/proposals.
+`proposals` source is tests/fixtures/proposals. Runs started from the UI execute in the engine's
+own subprocess, which reads the repo's ingest.toml sources.
 """
 
 from __future__ import annotations
@@ -17,7 +18,6 @@ from types import MappingProxyType
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import fakes  # noqa: E402
 import seed  # noqa: E402
 
 from ingest.api.app import DEFAULT_HOST, DEFAULT_PORT  # noqa: E402
@@ -48,8 +48,6 @@ def main(argv: list[str] | None = None) -> int:
     if args.seed != "none" and not config.catalog_path.exists():
         log.info("seeding %s (%s)", config.data_dir, args.seed)
         log.info("seeded: %s", seed.seed(config, real=args.seed == "real"))
-    for name in fakes.install(config):
-        log.info("fake: %s", name)
 
     import uvicorn
 
