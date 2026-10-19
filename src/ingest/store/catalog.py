@@ -773,6 +773,11 @@ class Catalog:
                 "INSERT OR IGNORE INTO removed_docs (doc_id, removed_at) VALUES (?, ?)", (doc_id, _now())
             )
 
+    def restore_removed_doc(self, doc_id: str) -> None:
+        """Undo add_removed_doc (the doc was uploaded again). No-op if not removed."""
+        with self.transaction():
+            self._conn.execute("DELETE FROM removed_docs WHERE doc_id = ?", (doc_id,))
+
     def removed_docs(self) -> set[str]:
         return {r["doc_id"] for r in self._all("SELECT doc_id FROM removed_docs")}
 
