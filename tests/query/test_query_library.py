@@ -15,7 +15,7 @@ from ingest.contract import text_hash
 from ingest.publish import Library
 from ingest.query import QueryConfig
 from ingest.query.library import LIST_LIMIT, LibraryCache
-from ingest.store.catalog import Catalog, SnapshotDocInput, VersionDocInput
+from ingest.store.catalog import Catalog, PendingDocInput, SnapshotDocInput, VersionDocInput
 from ingest.store.objects import ObjectStore
 
 DIM = 4
@@ -385,3 +385,65 @@ def test_search_during_reload(env: Env, loaded: LibraryCache) -> None:
         t.join(5)
     assert not errors
     assert loaded.version_id == env.catalog.current_version("default", "embed").id  # type: ignore[union-attr]
+
+
+def test_loads_the_real_library_view(config: Config, cache: LibraryCache) -> None:
+    """publish.library (not mocked): version rows, a pending upload, a removed upload."""
+    catalog, objects = Catalog(config.catalog_path), ObjectStore(config.objects_dir)
+
+    def table(doc_id: str, texts: list[str], vectors: list[np.ndarray]) -> pa.Table:
+        rows = [chunk(doc_id, i, t, v) for i, (t, v) in enumerate(zip(texts, vectors, strict=True))]
+        joined = {"paths", "job_number", "project", "subfolder", "filename", "dup_count"}
+        keep = [f for f in ROW_SCHEMA if f.name not in joined]
+        rows = [{**r, "vector": np.asarray(r["vector"], dtype=np.float32).tolist()} for r in rows]
+        return pa.Table.from_pylist([{f.name: r[f.name] for f in keep} for r in rows], schema=pa.schema(keep))
+
+    snapshot = [
+        SnapshotDocInput(
+            "p1", ("2292 SZEKERES/CONTRACT/fees.pdf",), 1, 1,
+            {"job_number": "2292", "project": "SZEKERES", "filename": "fees.pdf"},
+        ),
+        SnapshotDocInput("u0", ("uploads/old.pdf",), 1, 1, {"filename": "old.pdf"}),
+    ]
+    snapshot_id = catalog.create_snapshot("proposals", snapshot, 2)
+    v = catalog.create_version(
+        dag="default", node="embed", node_fp="fp", snapshot_id=snapshot_id, input_versions={}, run_id=None,
+        commit="abc", dirty=False, scratch=False, artifact_type="embed",
+        meta={"describe": {"model": "m", "revision": "r1", "dim": DIM, "query_instruction": "q"}},
+    )
+    catalog.add_version_docs(
+        v.id,
+        [
+            VersionDocInput(
+                "p1", "ok",
+                objects.put_table(table("p1", ["Fee $1,750.00", BOILERPLATE], [unit(1, 0, 0, 0), unit(0, 0, 1, 0)])),
+                "parquet",
+            ),
+            VersionDocInput("u0", "ok", objects.put_table(table("u0", ["old upload"], [unit(0, 1, 0, 0)])), "parquet"),
+        ],
+    )
+    catalog.finalize_version(v.id, {})
+    catalog.set_current("default", "embed", v.id)
+    run_id = catalog.create_run("default", {}, scratch=True, commit=None, dirty=False)
+    pending = table("u1", ["addendum text", BOILERPLATE], [unit(0, 1, 0, 0), unit(0, 0, 1, 0.1)])
+    catalog.add_pending_doc(
+        PendingDocInput(
+            "u1", v.id, run_id, ("uploads/addendum.pdf",), {"filename": "addendum.pdf"}, objects.put_table(pending), 1
+        )
+    )
+    catalog.add_removed_doc("u0")
+
+    cache.load()
+    assert cache.version_id == v.id
+    assert cache.contains("p1") and cache.contains("u1") and not cache.contains("u0")
+    u1 = cache.document("u1")
+    assert u1 is not None and (u1.upload, u1.pending, u1.filename, u1.pages) == (True, True, "addendum.pdf", 1)
+    p1 = cache.document("p1")
+    assert p1 is not None and (p1.upload, p1.pending, p1.job_number) == (False, False, "2292")
+    hits = cache.search("y")
+    assert hits[0].chunk_id == "u1-0" and len(hits) == 3  # four rows, the shared boilerplate collapsed
+    boiler = cache.search("z", k=1)[0]
+    assert boiler.doc_id == "p1" and boiler.also_in == 1
+    assert [p.text for p in cache.read("u1")] == ["addendum text", BOILERPLATE]
+    assert [d.doc_id for d in cache.list_documents(job_number="2292")] == ["p1"]
+    catalog.close()
