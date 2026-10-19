@@ -153,8 +153,10 @@ def _version(
     return w_catalog.finalize_version(v.id, stats)
 
 
-def git(repo: Path, *args: str) -> None:
-    subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
+def git(repo: Path, *args: str) -> str:
+    """Same contract as tests/conftest.py's `git`: both conftest modules import as `conftest`,
+    so whichever loads last serves `from conftest import git` elsewhere in the suite."""
+    return subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True).stdout
 
 
 @pytest.fixture(autouse=True)
