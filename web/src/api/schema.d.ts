@@ -4,6 +4,162 @@
  */
 
 export interface paths {
+    "/api/chat/chats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Chats */
+        get: operations["list_chats_api_chat_chats_get"];
+        put?: never;
+        /** Create Chat */
+        post: operations["create_chat_api_chat_chats_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/chat/chats/{chat_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Chat */
+        get: operations["get_chat_api_chat_chats__chat_id__get"];
+        put?: never;
+        post?: never;
+        /** Delete Chat */
+        delete: operations["delete_chat_api_chat_chats__chat_id__delete"];
+        options?: never;
+        head?: never;
+        /** Rename Chat */
+        patch: operations["rename_chat_api_chat_chats__chat_id__patch"];
+        trace?: never;
+    };
+    "/api/chat/chats/{chat_id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Chat Events */
+        get: operations["chat_events_api_chat_chats__chat_id__events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/chat/chats/{chat_id}/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Ask */
+        post: operations["ask_api_chat_chats__chat_id__messages_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/chat/chats/{chat_id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Retry */
+        post: operations["retry_api_chat_chats__chat_id__retry_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/chat/chats/{chat_id}/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Stop */
+        post: operations["stop_api_chat_chats__chat_id__stop_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/chat/uploads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Upload */
+        post: operations["upload_api_chat_uploads_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/chat/uploads/{upload_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Remove Upload */
+        delete: operations["remove_upload_api_chat_uploads__upload_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/chat/uploads/{upload_id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Upload Events */
+        get: operations["upload_events_api_chat_uploads__upload_id__events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/compare": {
         parameters: {
             query?: never;
@@ -505,6 +661,113 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** AskRequest */
+        AskRequest: {
+            /** Scope */
+            scope?: string | null;
+            /** Text */
+            text: string;
+            /**
+             * Upload Ids
+             * @default []
+             */
+            upload_ids: string[];
+        };
+        /** AskResponse */
+        AskResponse: {
+            answer: components["schemas"]["AssistantMessage"];
+            question: components["schemas"]["UserMessage"];
+        };
+        /** AssistantMessage */
+        AssistantMessage: {
+            /** Citations */
+            citations: components["schemas"]["Citation"][];
+            /** Created At */
+            created_at: string;
+            /** Error */
+            error: string | null;
+            /** Id */
+            id: string;
+            /** Parts */
+            parts: (components["schemas"]["TextPart"] | components["schemas"]["CitationPart"])[];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            role: "assistant";
+            scope: components["schemas"]["Scope"] | null;
+            /** Search Steps */
+            search_steps: components["schemas"]["SearchStep"][];
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "generating" | "complete" | "stopped" | "error";
+        };
+        /** Body_upload_api_chat_uploads_post */
+        Body_upload_api_chat_uploads_post: {
+            /** File */
+            file: string;
+        };
+        /** ChatDetail */
+        ChatDetail: {
+            /** Generating */
+            generating: boolean;
+            /** Id */
+            id: string;
+            /** Messages */
+            messages: (components["schemas"]["UserMessage"] | components["schemas"]["AssistantMessage"])[];
+            scope: components["schemas"]["Scope"] | null;
+            /** Title */
+            title: string | null;
+        };
+        /** ChatList */
+        ChatList: {
+            /** Chats */
+            chats: components["schemas"]["ChatSummary"][];
+            /** Library Ready */
+            library_ready: boolean;
+        };
+        /** ChatSummary */
+        ChatSummary: {
+            /** Generating */
+            generating: boolean;
+            /** Id */
+            id: string;
+            /** Title */
+            title: string | null;
+            /** Updated At */
+            updated_at: string;
+        };
+        /** Citation */
+        Citation: {
+            /** Chunk Id */
+            chunk_id: string | null;
+            /** Cited Text */
+            cited_text: string;
+            /** Doc Id */
+            doc_id: string;
+            /** Filename */
+            filename: string | null;
+            /** N */
+            n: number;
+            /** Pages */
+            pages: number[];
+            /** Regions */
+            regions: components["schemas"]["Region"][];
+            /** Removed */
+            removed: boolean;
+        };
+        /** CitationPart */
+        CitationPart: {
+            /** N */
+            n: number;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "citation";
+        };
         /** ComparisonOut */
         ComparisonOut: {
             a: components["schemas"]["VersionSummary"];
@@ -653,6 +916,30 @@ export interface components {
              */
             source: "hard" | "quality" | "script";
         };
+        /**
+         * LibraryDocument
+         * @description A document returned by list_documents.
+         */
+        LibraryDocument: {
+            /** Doc Id */
+            doc_id: string;
+            /** Filename */
+            filename: string | null;
+            /** Job Number */
+            job_number: string | null;
+            /** Pages */
+            pages: number | null;
+            /** Paths */
+            paths: string[];
+            /** Pending */
+            pending: boolean;
+            /** Project */
+            project: string | null;
+            /** Subfolder */
+            subfolder: string | null;
+            /** Upload */
+            upload: boolean;
+        };
         /** LogLine */
         LogLine: {
             /** Dag */
@@ -751,6 +1038,39 @@ export interface components {
             /** Script */
             script: string;
         };
+        /**
+         * Passage
+         * @description A chunk returned by search_documents or read_document.
+         */
+        Passage: {
+            /**
+             * Also In
+             * @default 0
+             */
+            also_in: number;
+            /** Chunk Id */
+            chunk_id: string;
+            /** Doc Id */
+            doc_id: string;
+            /** Filename */
+            filename: string | null;
+            /** Job Number */
+            job_number: string | null;
+            /** Pages */
+            pages: number[];
+            /** Project */
+            project: string | null;
+            /** Regions */
+            regions: components["schemas"]["Region"][];
+            /** Score */
+            score?: number | null;
+            /** Section */
+            section: string[];
+            /** Seq */
+            seq: number;
+            /** Text */
+            text: string;
+        };
         /** PlanInput */
         PlanInput: {
             /** Fingerprint */
@@ -778,6 +1098,15 @@ export interface components {
             y0: number;
             /** Y1 */
             y1: number;
+        };
+        /** RenameRequest */
+        RenameRequest: {
+            /** Title */
+            title: string;
+        };
+        /** RetryResponse */
+        RetryResponse: {
+            answer: components["schemas"]["AssistantMessage"];
         };
         /** RevalidateResult */
         RevalidateResult: {
@@ -959,6 +1288,13 @@ export interface components {
              */
             status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
         };
+        /** Scope */
+        Scope: {
+            /** Doc Id */
+            doc_id: string;
+            /** Filename */
+            filename: string | null;
+        };
         /** SearchHit */
         SearchHit: {
             /** Chunk Id */
@@ -1010,6 +1346,21 @@ export interface components {
             /** Model */
             model: string | null;
             version: components["schemas"]["VersionSummary"];
+        };
+        /** SearchStep */
+        SearchStep: {
+            /** Error */
+            error: string | null;
+            /** Passages */
+            passages: (components["schemas"]["Passage"] | components["schemas"]["LibraryDocument"])[];
+            /** Query */
+            query: string | null;
+            /** Round */
+            round: number;
+            /** Scope */
+            scope: string | null;
+            /** Tool */
+            tool: string;
         };
         /** SlowDoc */
         SlowDoc: {
@@ -1088,6 +1439,61 @@ export interface components {
             created: boolean;
             diff: components["schemas"]["SnapshotDiffOut"];
             snapshot: components["schemas"]["SnapshotOut"];
+        };
+        /** TextPart */
+        TextPart: {
+            /** Text */
+            text: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "text";
+        };
+        /** UploadCard */
+        UploadCard: {
+            /** Doc Id */
+            doc_id: string;
+            /** Error */
+            error: string | null;
+            /** Filename */
+            filename: string;
+            /** Id */
+            id: string;
+            /** Job Number */
+            job_number: string | null;
+            /** Pages */
+            pages: number | null;
+            /** Project */
+            project: string | null;
+            /** Removable */
+            removable: boolean;
+            /** Removed */
+            removed: boolean;
+            /** Stage */
+            stage: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "processing" | "ready" | "failed";
+        };
+        /** UserMessage */
+        UserMessage: {
+            /** Attachments */
+            attachments: components["schemas"]["UploadCard"][];
+            /** Created At */
+            created_at: string;
+            /** Id */
+            id: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            role: "user";
+            scope: components["schemas"]["Scope"] | null;
+            /** Text */
+            text: string;
         };
         /** ValidationError */
         ValidationError: {
@@ -1317,6 +1723,369 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    list_chats_api_chat_chats_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatList"];
+                };
+            };
+        };
+    };
+    create_chat_api_chat_chats_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatSummary"];
+                };
+            };
+        };
+    };
+    get_chat_api_chat_chats__chat_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                chat_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_chat_api_chat_chats__chat_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                chat_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rename_chat_api_chat_chats__chat_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                chat_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RenameRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatSummary"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    chat_events_api_chat_chats__chat_id__events_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                chat_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": unknown;
+                };
+            };
+            /** @description No answer is generating */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ask_api_chat_chats__chat_id__messages_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                chat_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AskRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AskResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    retry_api_chat_chats__chat_id__retry_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                chat_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RetryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stop_api_chat_chats__chat_id__stop_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                chat_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upload_api_chat_uploads_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_upload_api_chat_uploads_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UploadCard"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    remove_upload_api_chat_uploads__upload_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                upload_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UploadCard"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upload_events_api_chat_uploads__upload_id__events_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                upload_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     compare_api_compare_get: {
         parameters: {
             query: {
