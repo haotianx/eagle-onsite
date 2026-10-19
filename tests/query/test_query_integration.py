@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import shutil
+import subprocess
 import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -14,7 +15,6 @@ from typing import Any
 
 import numpy as np
 import pytest
-from conftest import FIXTURES, git
 
 from ingest.config import Config, load_config
 from ingest.engine.executor import run as run_dag
@@ -28,6 +28,7 @@ from ingest.state import promote
 from ingest.store.catalog import Catalog
 
 NODES = Path(__file__).parent / "nodes"
+FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "proposals"
 SZEKERES = FIXTURES / "2292 SZEKERES/CONTRACT/AEROTECH/2292 Szekeres Proposal.pdf"
 ADDENDUM = FIXTURES / "3426 AGUILAR COLINA FUERTE/CONTRACT/PROPOSAL ADDENDUM.pdf"
 FEE = "1,750.00"
@@ -62,6 +63,10 @@ class HashEmbedder:
 
     def embed(self, text: str) -> np.ndarray:
         return self.vector(text)
+
+
+def git(repo: Path, *args: str) -> None:
+    subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True)
 
 
 def write_dag(repo: Path, model: str) -> None:
