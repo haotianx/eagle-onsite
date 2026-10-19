@@ -16,6 +16,10 @@ dependencies = [
     "typer",
     "watchfiles",
     "psutil",
+    "fastapi",
+    "uvicorn",
+    "python-multipart",
+    "anthropic",
 ]
 
 [project.scripts]
@@ -23,6 +27,7 @@ ingest = "ingest.cli:main"
 
 [dependency-groups]
 dev = [
+    "httpx",
     "pytest",
     "pytest-timeout",
 ]
