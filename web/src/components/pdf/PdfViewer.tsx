@@ -125,6 +125,7 @@ export function PdfViewer({ docId, page, onPageChange, highlights, className }: 
       ) : (
         <Document
           file={file}
+          suspense={false}
           onLoadSuccess={onLoad}
           loading={<PageSkeleton />}
           error={<Message>Unreadable PDF</Message>}
@@ -148,6 +149,7 @@ export function PdfViewer({ docId, page, onPageChange, highlights, className }: 
                   {visible.has(n) && (
                     <Page
                       pageNumber={n}
+                      suspense={false}
                       width={width}
                       renderTextLayer={false}
                       renderAnnotationLayer={false}
