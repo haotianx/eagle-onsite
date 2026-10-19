@@ -59,7 +59,7 @@ function RunView({ run }: { run: RunDetail }) {
         <div className="flex flex-wrap items-center gap-2">
           <h1 className="font-mono text-lg font-semibold">Run #{run.id}</h1>
           <RunStatusBadge status={run.status} />
-          <ScratchBadge scratch={run.scratch} />
+          {run.scratch && <ScratchBadge scratch />}
           <RunKindBadge kind={run.kind} />
           {run.kind === "single_doc" && run.doc_filename && <span className="text-sm">{run.doc_filename}</span>}
           <span className="ml-auto">

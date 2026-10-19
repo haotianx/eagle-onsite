@@ -95,7 +95,7 @@ export function RunsTable({ runs }: { runs: RunSummary[] }) {
             <TableCell>
               <div className="flex items-center gap-1.5">
                 <RunStatusBadge status={run.status} />
-                <ScratchBadge scratch={run.scratch} />
+                {run.scratch && <ScratchBadge scratch />}
               </div>
             </TableCell>
             <TableCell title={formatDateTime(run.started_at ?? run.created_at)}>
