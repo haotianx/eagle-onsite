@@ -30,7 +30,7 @@ def dev_config(data_dir: Path) -> Config:
     return Config(
         repo_root=REPO,
         data_dir=(REPO / data_dir).resolve(),
-        sources=MappingProxyType({"proposals": SourceConfig("proposals", seed.FIXTURES)}),
+        sources=MappingProxyType({"proposals": SourceConfig("proposals", root=seed.FIXTURES)}),
     )
 
 
