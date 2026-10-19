@@ -1,5 +1,7 @@
 /** Search-param validators for the engineer routes. The router JSON-parses values, so numbers can
- * arrive as numbers or strings and numeric-looking strings as numbers. Invalid values are dropped. */
+ * arrive as numbers or strings and numeric-looking strings as numbers. Invalid values become
+ * undefined; every key is returned so the validated value overrides the raw one (route search
+ * is merged over the parent's raw search). */
 
 type Raw = Record<string, unknown>;
 
@@ -18,17 +20,12 @@ function oneOf<T extends string>(options: readonly T[], value: unknown): T | und
   return options.includes(value as T) ? (value as T) : undefined;
 }
 
-/** Drops undefined entries so URLs stay clean. */
-function compact<T extends object>(search: T): T {
-  return Object.fromEntries(Object.entries(search).filter(([, v]) => v !== undefined)) as T;
-}
-
 export interface DagSearch {
   node?: string;
 }
 
 export function validateDagSearch(raw: Raw): DagSearch {
-  return compact({ node: str(raw.node) });
+  return { node: str(raw.node) };
 }
 
 export interface DocumentSearch {
@@ -38,7 +35,7 @@ export interface DocumentSearch {
 }
 
 export function validateDocumentSearch(raw: Raw): DocumentSearch {
-  return compact({ node: str(raw.node), version: int(raw.version), page: int(raw.page) });
+  return { node: str(raw.node), version: int(raw.version), page: int(raw.page) };
 }
 
 export interface RunsSearch {
@@ -46,7 +43,7 @@ export interface RunsSearch {
 }
 
 export function validateRunsSearch(raw: Raw): RunsSearch {
-  return compact({ dag: str(raw.dag) });
+  return { dag: str(raw.dag) };
 }
 
 export interface RunSearch {
@@ -56,7 +53,7 @@ export interface RunSearch {
 }
 
 export function validateRunSearch(raw: Raw): RunSearch {
-  return compact({ node: str(raw.node), doc: str(raw.doc), level: str(raw.level) });
+  return { node: str(raw.node), doc: str(raw.doc), level: str(raw.level) };
 }
 
 export interface VersionSearch {
@@ -67,12 +64,12 @@ export interface VersionSearch {
 }
 
 export function validateVersionSearch(raw: Raw): VersionSearch {
-  return compact({
+  return {
     tab: oneOf(["docs", "issues"], raw.tab),
     status: oneOf(["ok", "error", "skipped"], raw.status),
     q: str(raw.q),
     level: oneOf(["error", "warning"], raw.level),
-  });
+  };
 }
 
 export interface CompareSearch {
@@ -82,7 +79,7 @@ export interface CompareSearch {
 }
 
 export function validateCompareSearch(raw: Raw): CompareSearch {
-  return compact({ a: int(raw.a), b: int(raw.b), doc: str(raw.doc) });
+  return { a: int(raw.a), b: int(raw.b), doc: str(raw.doc) };
 }
 
 export interface SearchSearch {
@@ -93,7 +90,7 @@ export interface SearchSearch {
 }
 
 export function validateSearchSearch(raw: Raw): SearchSearch {
-  return compact({ q: str(raw.q), a: int(raw.a), b: int(raw.b), k: int(raw.k) });
+  return { q: str(raw.q), a: int(raw.a), b: int(raw.b), k: int(raw.k) };
 }
 
 export interface SourcesSearch {
@@ -102,5 +99,5 @@ export interface SourcesSearch {
 }
 
 export function validateSourcesSearch(raw: Raw): SourcesSearch {
-  return compact({ source: str(raw.source), snapshot: int(raw.snapshot) });
+  return { source: str(raw.source), snapshot: int(raw.snapshot) };
 }
