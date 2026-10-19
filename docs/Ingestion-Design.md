@@ -16,7 +16,7 @@ Ingest the firm's proposal PDFs and process them through an engineer-defined DAG
 
 | Term | Meaning |
 | --- | --- |
-| Source | A named local folder of documents. |
+| Source | A named set of local folders of documents. |
 | Snapshot | Immutable manifest of a source at sync time. Doc id = SHA-256 of the file; identical files collapse to one doc listing all paths. |
 | Script | A reusable Python file implementing the node contract. |
 | Checks file | An optional Python file with script-declared validation for a node. |
@@ -91,7 +91,9 @@ A run is defined by:
 
 Examples: swap the chunker and run `chunk` alone over current OCR · run `chunk` + downstream · force the whole DAG · sync new proposals and rerun — per-doc nodes process only the new docs.
 
-One run per `<dag>/<node>` at a time; triggers arriving meanwhile merge into one follow-up run. Runs start manually from the UI or CLI.
+One run per `<dag>/<node>` at a time (single-doc runs excepted); triggers arriving meanwhile merge into one follow-up run. Runs start manually from the UI or CLI; single-doc runs start from the query app.
+
+**Single-doc runs** process one document for the query app's uploads (Query-Design §12) through the node chain recorded in the current `embed` version's lineage — its scripts at the lineage's git commit, params and model revisions — so outputs land in the per-doc cache under the same fingerprints and a later full run reuses them. They create no version, take no per-node lock, run in one warm worker with models loaded, and appear in Runs with a Single-doc badge. Outputs are recorded in `pending_docs` against that version; when a new `embed` version is promoted, library docs not in it are reprocessed against it. If the environment changed since that version was built, outputs still serve the library but full runs don't reuse them.
 
 ## 9. Deduplication
 
@@ -135,6 +137,7 @@ One run per `<dag>/<node>` at a time; triggers arriving meanwhile merge into one
 - **Vector table**: one row per chunk — `chunk_id` (hash of doc id + text), `doc_id`, `seq`, `text`, `embed_text`, `pages`, `section`, `regions[{page, bbox}]`, `text_hash`, `vector` (float32[1024], L2-normalized) — joined at load time with `dup_count` and document metadata from the version's snapshot: `paths`, and `job_number`, `project`, `subfolder`, `filename` parsed from the primary path (e.g. `2292 SZEKERES/CONTRACT/AEROTECH/…`). Joining at load time keeps cached outputs independent of file locations.
 - **Version metadata**: model id and revision, dimension, metric (cosine = dot product on normalized vectors), and the Qwen3 query instruction, so later search embeds queries identically.
 - **Access**: `ingest.load_table("default/embed")` (current, or `@vN`) returns an Arrow table; promoting a version writes `.ingest/published/<dag>/<node>.parquet`.
+- **Library view**: `ingest.load_library("default/embed")` returns the current version's rows plus `pending_docs` rows for source docs not in it, minus `removed_docs`, and a document table (doc id, paths, metadata, pages, upload flag). The query app searches it (Query-Design §11).
 - **Originals** are referenced in place (path + hash), not copied. If a file later changes or disappears, old versions show "original changed or missing" instead of the PDF.
 - The text column stays alongside vectors so lexical search can be added later.
 
@@ -168,8 +171,8 @@ Promote confirmation names the version being replaced, lists issues, and warns w
 
 - **Stack**: Python 3.13 (uv-managed; system Python 3.15 is too new for torch/Docling wheels); FastAPI + SSE; React + TypeScript (Vite), PDF.js, a graph library; typed client generated from OpenAPI.
 - **Engine**: custom and small — plans node order, resolves input versions, fingerprints, skips cached docs, runs per-doc nodes on a process pool and GPU nodes in one batched process, runs validation, writes versions. Runs execute in a worker subprocess so the API stays responsive.
-- **Storage**: SQLite catalog (single writer: the run's parent process) + content-addressed objects `objects/<sha[:2]>/<sha>.{json,parquet}` and a cache index (node fingerprint, doc hash) → object, under `.ingest/` at the repo root (gitignored; overridable via `ingest.toml` or `INGEST_DATA_DIR`).
-- **Catalog tables**: sources, snapshots, snapshot_docs (incl. path metadata and sync flags), versions, version_docs (incl. error, traceback, timing, peak memory), version_issues, current, runs, run_events, run_metrics. Logs and debug files live on disk under `.ingest/runs/<run id>/`, indexed by node and doc.
+- **Storage**: SQLite catalog in WAL mode (writers: the run's parent process and the single-doc worker, short transactions) + content-addressed objects `objects/<sha[:2]>/<sha>.{json,parquet}` and a cache index (node fingerprint, doc hash) → object, under `.ingest/` at the repo root (gitignored; overridable via `ingest.toml` or `INGEST_DATA_DIR`).
+- **Catalog tables**: sources, snapshots, snapshot_docs (incl. path metadata and sync flags), versions, version_docs (incl. error, traceback, timing, peak memory), version_issues, current, runs, run_events, run_metrics, pending_docs, removed_docs. Logs and debug files live on disk under `.ingest/runs/<run id>/`, indexed by node and doc.
 - **Search (UI)**: exact cosine over a version's vectors in memory (~41K × 1024); queries embedded with each side's recorded model.
 
 ## 16. Repo layout
@@ -189,19 +192,20 @@ src/ingest/
   sources.py       sync → snapshot, path metadata, diff
   validation.py    hard, quality and script-declared checks; revalidate
   obs.py           logging setup, per-doc capture, metrics, debug files
-  engine/planner.py engine/executor.py engine/worker.py
+  engine/planner.py engine/executor.py engine/worker.py engine/single_doc.py
   state.py         node states, promotion rules
-  publish.py       load_table, dup_count, published Parquet
+  publish.py       load_table, load_library, dup_count, published Parquet
   metrics.py       Compare metrics
   search.py        in-memory search
   api/             FastAPI routes + SSE
+  query/           document chat app (Query-Design §18)
   cli.py
 tests/fixtures/proposals/   real PDFs, original folder structure
 tests/
 web/
 ```
 
-**API**: `GET /dags`, `GET /dags/{dag}`, `GET /dags/{dag}/nodes/{node}/versions`, `POST /runs/plan`, `POST /runs`, `GET /runs`, `GET /runs/{id}`, `GET /runs/{id}/events`, `GET /versions/{id}`, `GET /versions/{id}/docs`, `GET /versions/{id}/docs/{doc}`, `GET /versions/{id}/issues`, `POST /versions/{id}/revalidate`, `POST /versions/{id}/promote`, `POST /runs/{id}/cancel`, `GET /runs/{id}/logs?node=&doc=&level=`, `GET /runs/{id}/metrics`, `GET /versions/{id}/docs/{doc}/debug`, `GET /compare?a=&b=`, `POST /search`, `GET /docs/{doc}/pdf`, `GET /sources`, `POST /sources/{name}/sync`, `GET /snapshots/{id}/diff`.
+**API**: `GET /dags`, `GET /dags/{dag}`, `GET /dags/{dag}/nodes/{node}/versions`, `POST /runs/plan`, `POST /runs`, `GET /runs`, `GET /runs/{id}`, `GET /runs/{id}/events`, `GET /versions/{id}`, `GET /versions/{id}/docs`, `GET /versions/{id}/docs/{doc}`, `GET /versions/{id}/issues`, `POST /versions/{id}/revalidate`, `POST /versions/{id}/promote`, `POST /runs/{id}/cancel`, `GET /runs/{id}/logs?node=&doc=&level=`, `GET /runs/{id}/metrics`, `GET /versions/{id}/docs/{doc}/debug`, `GET /compare?a=&b=`, `POST /search`, `GET /docs/{doc}/pdf`, `GET /sources`, `POST /sources/{name}/sync`, `GET /snapshots/{id}/diff`. Query app routes: Query-Design §13.
 
 ## 17. Build plan
 
@@ -209,11 +213,12 @@ Implemented with the repo's `parallel-implement` skill: scaffolding and the shar
 
 - **Phase 1 — engine slice**, in dependency waves so each component tests against real code:
   - Wave 1: (A) config, spec, scripts, fingerprint, gitinfo · (B) catalog, objects · (D) default nodes · (F) logging, run metrics, debug files
-  - Wave 2: (C) sources and path metadata · (E) validation · (H) publish and Compare metrics
-  - Wave 3: (G) planner, executor and worker (timeouts, crash isolation, cancel), state
+  - Wave 2: (C) sources (several folders) and path metadata · (E) validation · (H) publish (incl. `load_library`) and Compare metrics
+  - Wave 3: (G) planner, executor and worker (timeouts, crash isolation, cancel), state, single-doc runs
   - Wave 4: (I) CLI incl. doctor and models pull
   - Gate: CLI end to end on fixtures, then 25 real proposals.
 - **Phase 2 — API and UI**: (J) API, search · (K) web scaffold and shared components · then (L) DAGs, DAG detail, Run launcher · (M) Runs (logs, timings, cancel) · (N) Version, Compare · (O) Document · (P) Search · (Q) Sources.
+- **Phase 3 — query app**: Query-Design §19.
 
 **Fixtures** (~1.3 MB, real proposals including client names and fees, folder structure kept):
 - `2292 SZEKERES/CONTRACT/AEROTECH/2292 Szekeres Proposal.pdf` — born-digital, fees, 2 pages
@@ -237,7 +242,7 @@ Implemented with the repo's `parallel-implement` skill: scaffolding and the shar
 
 ## 19. Smaller defaults
 
-Every PDF under the source root is included (optional glob filter); non-PDFs skipped · a changed file is a new doc; a deleted file drops out of new versions · signed and unsigned versions stay separate.
+Every PDF under the source's folders is included (optional glob filter); non-PDFs skipped · the default source has two folders, `/Users/Shared/proposals` and `.ingest/uploads/` (written by the query app); path metadata is parsed for the first, uploads get `filename` only · a changed file is a new doc; a deleted file drops out of new versions · signed and unsigned versions stay separate.
 
 ## 20. Deferred
 
@@ -256,5 +261,6 @@ Schedules and watching the share · `smb://` and non-PDF sources · shared serve
   - Test nodes that sleep past `timeout`, crash the worker (`os._exit`) and raise: each fails only its doc with the right error; other docs complete. Cancelling mid-run leaves no partial version; rerunning reuses finished docs.
   - `ingest logs <run> --doc <id>` returns only that doc's lines, including captured script warnings; a scratch run's `ctx.debug` files appear for the doc and are absent from promotable runs.
   - With `HF_HUB_OFFLINE=1` after `ingest models pull`, a full run succeeds; `ingest doctor` reports all checks passing.
+  - A single-doc run on a PDF added to `.ingest/uploads/` caches outputs under the current embed lineage's fingerprints without creating a version; `load_library` includes it; a following full run reuses it; adding it to `removed_docs` hides it immediately.
 - Opt-in: `INGEST_REAL_CORPUS=1 uv run pytest -m corpus` over 25 sampled real proposals.
 - UI walk-through in the browser pane: swap chunker → scratch run on 25 docs → Document highlights → Compare → Search → commit → full run → promote; Sync with an added PDF → incremental run.
