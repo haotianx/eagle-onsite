@@ -8,6 +8,8 @@ Please implement all parts of this design.
 - Use a fresh subagent to implement each discrete component. This subagent should implement, test, and check the final result against the design. Once completed, it should commit its changes (but do not push). Then destroy the subagent.
 - Subagents should work on discrete components in parallel where possible.
 - Define the file structure and other shared components before spinning up subagents. Make sure that work provisioned for each subagent does not collide with work of other subagents.
-- If no subagent model is specified, subagents should use GPT-6.1-Sol on medium effort without fast mode.
+- If no subagent model is specified, subagents should use:
+  - For Claude: Opus 5.5 on medium effort
+  - For Codex: GPT 6.1 Sol on medium effort without fast mode
 
 If you have any questions, clarify them with me before beginning implementation.
